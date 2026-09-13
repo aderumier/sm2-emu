@@ -20,6 +20,8 @@
 #include "core/log.h"
 
 #include <algorithm>
+#include <array>
+#include <unordered_map>
 
 namespace sm2::hw {
 namespace {
@@ -346,15 +348,67 @@ u16 Model2Sound::read16(u32 address)
 
 void Model2Sound::configure_balance(const std::string& game_name)
 {
+    // Per-set flat SCSP gain, in 1/256 units (256 == unity), levelling every
+    // set's measured in-game loudness against daytona (a deliberate mastering
+    // choice for a consistent home-listening volume across the library, not a
+    // hardware-accuracy claim
+    static const std::unordered_map<std::string, u16> kFlatGain = {
+        {"airwlkrs", 793},
+        {"bel", 1521},
+        {"desert", 254},
+        {"doa", 254}, {"doaa", 254}, {"doaab", 254}, {"doaae", 254}, {"doab", 254},
+        {"dynabb", 3019},
+        {"dynabb97", 1296},
+        {"dynamcop", 1792}, {"dynamcopb", 1792}, {"dynamcopc", 1792},
+        {"dyndeka2", 1792}, {"dyndeka2b", 1792},
+        {"fvipers", 403}, {"fvipersa", 403}, {"fvipersb", 403},
+        {"gunblade", 1050},
+        {"hotd", 2735}, {"hotdo", 2735}, {"hotdp", 2735},
+        {"hpyagu98", 1275},
+        {"indy500", 2602}, {"indy500d", 2602}, {"indy500to", 2602},
+        {"lastbrnx", 2736}, {"lastbrnxj", 2736}, {"lastbrnxu", 2736},
+        {"manxtt", 799}, {"manxttc", 799}, {"manxttdx", 799},
+        {"motoraid", 1632}, {"motoraiddx", 1632},
+        {"overrev", 3892}, {"overrevb", 4022}, {"overrevba", 3852},
+        {"pltkids", 2770}, {"pltkidsa", 2770},
+        {"rchase2", 745}, {"rchase2a", 745},
+        {"schamp", 403}, {"sfight", 403},
+        {"segawski", 1353},
+        {"sgt24h", 6907},
+        {"skisuprg", 1323},
+        {"skytargt", 1592},
+        {"srallyc", 739}, {"srallycb", 739}, {"srallycc", 739},
+        {"srallycdx", 739}, {"srallycdxa", 739},
+        {"stcc", 384}, {"stcca", 384}, {"stccb", 384}, {"stcco", 384},
+        {"topskatr", 232}, {"topskatrj", 232}, {"topskatru", 232}, {"topskatruo", 232},
+        {"vcop", 321}, {"vcopa", 321},
+        {"vcop2", 641},
+        {"von", 1195}, {"vonj", 1195}, {"vonr", 1195}, {"vonu", 1195},
+        {"vstriker", 1576}, {"vstrikero", 1576},
+        {"waverunr", 1181},
+        {"zerogun", 1984}, {"zerogunj", 1984},
+        {"zeroguna", 2931}, {"zerogunaj", 2931},
+    };
+
     // The VF2 family shares one byte-identical sound driver, so one profile fits
     // all four. Gains settled by ear: music well back, hit SFX unchanged,
     // announcer and character speech forward.
     m_balance_active = game_name == "vf2" || game_name == "vf2a"
                     || game_name == "vf2b" || game_name == "vf2o";
-    m_music_gain     = 39;   // 15%
-    m_sfx_gain       = 256;  // 100%
-    m_announcer_gain = 333;  // 130%
-    m_voice_gain     = 460;  // 180%, character speech
+    if (m_balance_active) {
+        constexpr float kVf2FamilyGain = 840.0f / 256.0f;
+        m_music_gain     = static_cast<u16>(51   * kVf2FamilyGain);  // 20%
+        m_sfx_gain       = static_cast<u16>(256  * kVf2FamilyGain);  // 100%
+        m_announcer_gain = static_cast<u16>(333  * kVf2FamilyGain);  // 130%
+        m_voice_gain     = static_cast<u16>(410  * kVf2FamilyGain);  // 160%, character speech
+    }
+
+    const auto it = kFlatGain.find(game_name);
+    if (it != kFlatGain.end()) {
+        std::array<u16, 32> gains;
+        gains.fill(it->second);
+        m_scsp.set_slot_gains(gains.data());
+    }
 }
 
 void Model2Sound::update_balance_gains()

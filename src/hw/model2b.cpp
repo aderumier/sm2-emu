@@ -1106,6 +1106,17 @@ void Model2B::register_write(u32 address, u32 value, u32 width)
             m_intreq &= value;
             irq_update();
         } else {
+            // overrevb/overrevba only: their sound driver's timer-ack routine
+            // writes this register three times around one interrupt, and needs
+            // the second write to flush+service the first before it lands
+            if ((m_game.name == "overrevb" || m_game.name == "overrevba")
+                && m_pending_intena_valid) {
+                m_intena = m_pending_intena;
+                m_pending_intena_valid = false;
+                sound_ready_w();
+                irq_update();
+                service_timers();
+            }
             m_pending_intena       = value;
             m_pending_intena_cycle = m_cycles + 2;
             m_pending_intena_valid = true;
