@@ -312,7 +312,7 @@ bool Input::init(const WheelSettings& wheel)
     ids = SDL_GetJoysticks(&count);
     if (ids != nullptr) {
         for (int index = 0; index < count; ++index) {
-            if (!SDL_IsGamepad(ids[index])) {
+            if (is_wheel(ids[index]) || !SDL_IsGamepad(ids[index])) {
                 add_wheel(ids[index]);
             }
         }
@@ -366,7 +366,7 @@ void Input::handle_event(const SDL_Event& event)
         case SDL_EVENT_JOYSTICK_ADDED:
             // A joystick with a gamepad mapping arrives as GAMEPAD_ADDED too and
             // is handled there; only the unmapped ones (wheels) are ours here.
-            if (!SDL_IsGamepad(event.jdevice.which)) {
+            if (is_wheel(event.jdevice.which) || !SDL_IsGamepad(event.jdevice.which)) {
                 add_wheel(event.jdevice.which);
             }
             break;
@@ -396,6 +396,9 @@ void Input::add_gamepad(SDL_JoystickID id)
     if (std::any_of(m_pads.begin(), m_pads.end(),
                     [id](const Pad& pad) { return pad.id == id; })) {
         return;
+    }
+    if (is_wheel(id)) {
+        return;  // Opened by add_wheel instead.
     }
     if (!SDL_IsGamepad(id)) {
         // A joystick SDL has no mapping for. Reporting it is worth doing, because
@@ -450,6 +453,35 @@ SDL_Gamepad* Input::pad_for(u32 player) const
     return match != m_pads.end() ? match->handle : nullptr;
 }
 
+namespace {
+
+// SDL3 refuses haptics on a joystick with a gamepad mapping; find the device by name instead.
+SDL_Haptic* open_haptic_by_name(const char* name)
+{
+    if (name == nullptr) {
+        return nullptr;
+    }
+    SDL_Haptic*   haptic = nullptr;
+    int           count  = 0;
+    SDL_HapticID* ids    = SDL_GetHaptics(&count);
+    for (int index = 0; ids != nullptr && index < count && haptic == nullptr; ++index) {
+        const char* haptic_name = SDL_GetHapticNameForID(ids[index]);
+        if (haptic_name != nullptr && SDL_strcmp(haptic_name, name) == 0) {
+            haptic = SDL_OpenHaptic(ids[index]);
+        }
+    }
+    SDL_free(ids);
+    return haptic;
+}
+
+}  // namespace
+
+bool Input::is_wheel(SDL_JoystickID id) const
+{
+    // SDL knows wheels by vendor/product id, whatever gamepad mapping they carry
+    return SDL_GetJoystickTypeForID(id) == SDL_JOYSTICK_TYPE_WHEEL;
+}
+
 void Input::add_wheel(SDL_JoystickID id)
 {
     if (m_wheel.handle != nullptr) {
@@ -462,7 +494,7 @@ void Input::add_wheel(SDL_JoystickID id)
     // device that reports UNKNOWN is allowed through, since some wheels do, but a
     // positively-different type is refused.
     const SDL_JoystickType type = SDL_GetJoystickTypeForID(id);
-    if (type != SDL_JOYSTICK_TYPE_WHEEL && type != SDL_JOYSTICK_TYPE_UNKNOWN) {
+    if (type != SDL_JOYSTICK_TYPE_WHEEL && type != SDL_JOYSTICK_TYPE_UNKNOWN && !is_wheel(id)) {
         return;
     }
 
@@ -488,6 +520,35 @@ void Input::add_wheel(SDL_JoystickID id)
         m_wheel.steer_axis = m_wheel_settings.steer_axis;
         m_wheel.accel_axis = m_wheel_settings.accel_axis;
         m_wheel.brake_axis = m_wheel_settings.brake_axis;
+    } else if (SDL_Gamepad* pad = SDL_IsGamepad(id) ? SDL_OpenGamepad(id) : nullptr) {
+        // A wheel with a gamepad mapping: leftx steers, the triggers are the pedals.
+        int count = 0;
+        SDL_GamepadBinding** bindings = SDL_GetGamepadBindings(pad, &count);
+        for (int index = 0; bindings != nullptr && index < count; ++index) {
+            const SDL_GamepadBinding& bind = *bindings[index];
+            if (bind.input_type != SDL_GAMEPAD_BINDTYPE_AXIS
+                || bind.output_type != SDL_GAMEPAD_BINDTYPE_AXIS) {
+                continue;
+            }
+            const bool inverted = bind.input.axis.axis_min > bind.input.axis.axis_max;
+            switch (bind.output.axis.axis) {
+                case SDL_GAMEPAD_AXIS_LEFTX:
+                    m_wheel.steer_axis = bind.input.axis.axis;
+                    break;
+                case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
+                    m_wheel.accel_axis   = bind.input.axis.axis;
+                    m_wheel.accel_invert = inverted;
+                    break;
+                case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
+                    m_wheel.brake_axis   = bind.input.axis.axis;
+                    m_wheel.brake_invert = inverted;
+                    break;
+                default:
+                    break;
+            }
+        }
+        SDL_free(bindings);
+        SDL_CloseGamepad(pad);
     } else {
         m_wheel.steer_axis = axes > 0 ? 0 : -1;
         int assigned_pedals = 0;
@@ -521,6 +582,9 @@ void Input::add_wheel(SDL_JoystickID id)
     // than programmed as a spring. Uploaded once at zero level and left running.
     if (m_wheel_settings.ffb) {
         SDL_Haptic* haptic = SDL_OpenHapticFromJoystick(handle);
+        if (haptic == nullptr && SDL_IsGamepad(id)) {
+            haptic = open_haptic_by_name(SDL_GetJoystickName(handle));
+        }
         if (haptic == nullptr) {
             SM2_INFO("wheel has no force feedback: %s", SDL_GetError());
         } else if ((SDL_GetHapticFeatures(haptic) & SDL_HAPTIC_CONSTANT) == 0) {
@@ -653,9 +717,13 @@ bool Input::sample_wheel_channel(const rom::AnalogChannel& channel, u8* out) con
 
     // A pedal. The physical pedal gives fraction 0 released, 1 pressed. A wheel
     // whose pedal reads the other way is corrected by the user's invert flag.
-    const bool invert =
-        (channel.control == rom::AnalogControl::Brake) ? m_wheel_settings.brake_invert
-                                                       : m_wheel_settings.accel_invert;
+    // Calibrated axes keep the live GUI flags; otherwise use what add_wheel resolved.
+    const bool calibrated = m_wheel_settings.steer_axis >= 0 || m_wheel_settings.accel_axis >= 0
+                         || m_wheel_settings.brake_axis >= 0;
+    const bool brake      = channel.control == rom::AnalogControl::Brake;
+    const bool invert     = calibrated
+                                ? (brake ? m_wheel_settings.brake_invert : m_wheel_settings.accel_invert)
+                                : (brake ? m_wheel.brake_invert : m_wheel.accel_invert);
     if (invert) {
         fraction = 1.0f - fraction;
     }

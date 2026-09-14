@@ -303,10 +303,15 @@ private:
         int steer_axis = -1;
         int accel_axis = -1;
         int brake_axis = -1;
+        bool accel_invert = false;
+        bool brake_invert = false;
     };
 
     void add_gamepad(SDL_JoystickID id);
     void remove_gamepad(SDL_JoystickID id);
+
+    /// Whether `id` is a wheel even with a gamepad mapping: SDL types it as a wheel.
+    [[nodiscard]] bool is_wheel(SDL_JoystickID id) const;
 
     /// Open `id` as a wheel if it looks like one and no wheel is open yet.
     void add_wheel(SDL_JoystickID id);
