@@ -482,6 +482,13 @@ bool Input::is_wheel(SDL_JoystickID id) const
     return SDL_GetJoystickTypeForID(id) == SDL_JOYSTICK_TYPE_WHEEL;
 }
 
+s32 Input::wheel_button(Config::WheelRole role) const
+{
+    static const std::array<s32, Config::kWheelRoleCount> defaults = Config{}.wheel_buttons;
+    const auto& buttons = m_wheel_settings.buttons != defaults ? m_wheel_settings.buttons : m_wheel.buttons;
+    return buttons[static_cast<usize>(role)];
+}
+
 void Input::add_wheel(SDL_JoystickID id)
 {
     if (m_wheel.handle != nullptr) {
@@ -524,8 +531,27 @@ void Input::add_wheel(SDL_JoystickID id)
         // A wheel with a gamepad mapping: leftx steers, the triggers are the pedals.
         int count = 0;
         SDL_GamepadBinding** bindings = SDL_GetGamepadBindings(pad, &count);
+        const auto set_button = [this](Config::WheelRole role, int button) {
+            m_wheel.buttons[static_cast<usize>(role)] = button;
+        };
         for (int index = 0; bindings != nullptr && index < count; ++index) {
             const SDL_GamepadBinding& bind = *bindings[index];
+            if (bind.input_type == SDL_GAMEPAD_BINDTYPE_BUTTON
+                && bind.output_type == SDL_GAMEPAD_BINDTYPE_BUTTON) {
+                const int button = bind.input.button;
+                switch (bind.output.button) {
+                    case SDL_GAMEPAD_BUTTON_START:          set_button(Config::WheelRole::Start, button); break;
+                    case SDL_GAMEPAD_BUTTON_BACK:           set_button(Config::WheelRole::Coin, button); break;
+                    case SDL_GAMEPAD_BUTTON_SOUTH:          set_button(Config::WheelRole::Button1, button); break;
+                    case SDL_GAMEPAD_BUTTON_EAST:           set_button(Config::WheelRole::Button2, button); break;
+                    case SDL_GAMEPAD_BUTTON_WEST:           set_button(Config::WheelRole::Button3, button); break;
+                    case SDL_GAMEPAD_BUTTON_NORTH:          set_button(Config::WheelRole::Button4, button); break;
+                    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: set_button(Config::WheelRole::GearUp, button); break;
+                    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:  set_button(Config::WheelRole::GearDown, button); break;
+                    default: break;
+                }
+                continue;
+            }
             if (bind.input_type != SDL_GAMEPAD_BINDTYPE_AXIS
                 || bind.output_type != SDL_GAMEPAD_BINDTYPE_AXIS) {
                 continue;
@@ -845,7 +871,7 @@ s32 Input::pressed_wheel_button() const
 
 bool Input::menu_button_pressed()
 {
-    const s32 button = m_wheel_settings.buttons[static_cast<usize>(Config::WheelRole::Menu)];
+    const s32 button = wheel_button(Config::WheelRole::Menu);
     const bool held  = m_wheel.handle != nullptr && button >= 0
                     && button < SDL_GetNumJoystickButtons(m_wheel.handle)
                     && SDL_GetJoystickButton(m_wheel.handle, button);
@@ -1698,7 +1724,7 @@ void Input::poll(hw::Inputs* inputs, const rom::GameSpec& game) const
     if (m_wheel.handle != nullptr) {
         const int count = SDL_GetNumJoystickButtons(m_wheel.handle);
         const auto role_pressed = [&](Config::WheelRole role) {
-            const s32 button = m_wheel_settings.buttons[static_cast<usize>(role)];
+            const s32 button = wheel_button(role);
             return button >= 0 && button < count
                 && SDL_GetJoystickButton(m_wheel.handle, button);
         };
@@ -2134,7 +2160,7 @@ void Input::poll(hw::Inputs* inputs, const rom::GameSpec& game) const
         if (m_wheel.handle != nullptr) {
             const int count = SDL_GetNumJoystickButtons(m_wheel.handle);
             const auto role_held = [&](Config::WheelRole role) {
-                const s32 button = m_wheel_settings.buttons[static_cast<usize>(role)];
+                const s32 button = wheel_button(role);
                 return button >= 0 && button < count
                     && SDL_GetJoystickButton(m_wheel.handle, button);
             };
@@ -2201,7 +2227,7 @@ void Input::poll(hw::Inputs* inputs, const rom::GameSpec& game) const
         if (m_wheel.handle != nullptr) {
             const int count = SDL_GetNumJoystickButtons(m_wheel.handle);
             const auto role_held = [&](Config::WheelRole role) {
-                const s32 button = m_wheel_settings.buttons[static_cast<usize>(role)];
+                const s32 button = wheel_button(role);
                 return button >= 0 && button < count
                     && SDL_GetJoystickButton(m_wheel.handle, button);
             };

@@ -305,6 +305,9 @@ private:
         int brake_axis = -1;
         bool accel_invert = false;
         bool brake_invert = false;
+
+        /// Button per Config::WheelRole, taken from the gamepad mapping when there is one.
+        std::array<s32, Config::kWheelRoleCount> buttons = Config{}.wheel_buttons;
     };
 
     void add_gamepad(SDL_JoystickID id);
@@ -312,6 +315,9 @@ private:
 
     /// Whether `id` is a wheel even with a gamepad mapping: SDL types it as a wheel.
     [[nodiscard]] bool is_wheel(SDL_JoystickID id) const;
+
+    /// The wheel button bound to `role`: GUI-rebound buttons win, else the mapped ones.
+    [[nodiscard]] s32 wheel_button(Config::WheelRole role) const;
 
     /// Open `id` as a wheel if it looks like one and no wheel is open yet.
     void add_wheel(SDL_JoystickID id);
