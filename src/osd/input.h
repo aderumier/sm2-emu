@@ -313,7 +313,7 @@ private:
     void add_gamepad(SDL_JoystickID id);
     void remove_gamepad(SDL_JoystickID id);
 
-    /// Whether `id` is a wheel even with a gamepad mapping: SDL types it as a wheel.
+    /// Whether `id` is a wheel even with a gamepad mapping: SDL types it, or its unmapped twin, as a wheel.
     [[nodiscard]] bool is_wheel(SDL_JoystickID id) const;
 
     /// The wheel button bound to `role`: GUI-rebound buttons win, else the mapped ones.

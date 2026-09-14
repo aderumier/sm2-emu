@@ -474,12 +474,55 @@ SDL_Haptic* open_haptic_by_name(const char* name)
     return haptic;
 }
 
+// The unmapped joystick named like `id`'s gamepad mapping (a wheel behind a virtual device), or 0.
+SDL_JoystickID unmapped_twin(SDL_JoystickID id)
+{
+    const char* name = SDL_IsGamepad(id) ? SDL_GetGamepadNameForID(id) : nullptr;
+    if (name == nullptr) {
+        return 0;
+    }
+    SDL_JoystickID  twin  = 0;
+    int             count = 0;
+    SDL_JoystickID* ids   = SDL_GetJoysticks(&count);
+    for (int index = 0; ids != nullptr && index < count && twin == 0; ++index) {
+        const char* other = SDL_GetJoystickNameForID(ids[index]);
+        if (ids[index] != id && !SDL_IsGamepad(ids[index]) && other != nullptr
+            && SDL_strcmp(other, name) == 0) {
+            twin = ids[index];
+        }
+    }
+    SDL_free(ids);
+    return twin;
+}
+
+// Whether an unmapped `id` is represented by a mapped joystick carrying its name.
+bool has_mapped_twin(SDL_JoystickID id)
+{
+    const char* name = SDL_IsGamepad(id) ? nullptr : SDL_GetJoystickNameForID(id);
+    if (name == nullptr) {
+        return false;
+    }
+    bool            found = false;
+    int             count = 0;
+    SDL_JoystickID* ids   = SDL_GetJoysticks(&count);
+    for (int index = 0; ids != nullptr && index < count && !found; ++index) {
+        const char* other = SDL_IsGamepad(ids[index]) ? SDL_GetGamepadNameForID(ids[index]) : nullptr;
+        found = ids[index] != id && other != nullptr && SDL_strcmp(other, name) == 0;
+    }
+    SDL_free(ids);
+    return found;
+}
+
 }  // namespace
 
 bool Input::is_wheel(SDL_JoystickID id) const
 {
     // SDL knows wheels by vendor/product id, whatever gamepad mapping they carry
-    return SDL_GetJoystickTypeForID(id) == SDL_JOYSTICK_TYPE_WHEEL;
+    if (SDL_GetJoystickTypeForID(id) == SDL_JOYSTICK_TYPE_WHEEL) {
+        return true;
+    }
+    const SDL_JoystickID twin = unmapped_twin(id);
+    return twin != 0 && SDL_GetJoystickTypeForID(twin) == SDL_JOYSTICK_TYPE_WHEEL;
 }
 
 s32 Input::wheel_button(Config::WheelRole role) const
@@ -493,6 +536,9 @@ void Input::add_wheel(SDL_JoystickID id)
 {
     if (m_wheel.handle != nullptr) {
         return;  // One wheel, driving player one, is all a Model 2 cabinet wires.
+    }
+    if (has_mapped_twin(id)) {
+        return;  // Driven through the mapped virtual device carrying its name.
     }
 
     // Only take a device SDL classifies as a wheel. Anything else that lacks a
