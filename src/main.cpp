@@ -112,7 +112,6 @@ enum class GraphicsBackendChoice {
     w.rumble          = c.wheel_rumble;
     w.rumble_strength = c.wheel_rumble_strength;
     w.buttons       = c.wheel_buttons;
-    w.device        = c.wheel_device;
     w.steer_axis    = c.wheel_steer_axis;
     w.accel_axis    = c.wheel_accel_axis;
     w.brake_axis    = c.wheel_brake_axis;

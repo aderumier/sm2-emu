@@ -160,9 +160,6 @@ struct Config {
     /// Rumble strength, 0..100 percent.
     u32 wheel_rumble_strength = 40;
 
-    /// Event device to use as the wheel, or empty to detect one. Names a
-    /// front-end's remapped virtual wheel. Ignored if it is not present.
-    std::string wheel_device;
 
     /// The wheel's own physical rotation range (a G-series PC wheel is ~900).
     u32 wheel_steer_degrees = 270;

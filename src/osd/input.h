@@ -110,9 +110,6 @@ public:
         std::array<s32, Config::kWheelRoleCount> buttons =
             Config{}.wheel_buttons;
 
-        /// Event device to claim as the wheel; empty detects one.
-        std::string device;
-
         /// Wheel axis per analogue control, or -1 to auto-detect. Invert flags
         /// apply to a pedal that reads high released, low pressed.
         s32  steer_axis   = -1;
@@ -295,6 +292,9 @@ private:
         int            rumble_effect = -1;
         int            rumble_mag    = -1;  ///< last rumble magnitude, to skip no-ops.
 
+        bool           autocenter = false;  ///< device autocentre still holding it.
+        bool           can_rumble = false;  ///< has rumble motors of its own.
+
         /// Fallback when the device has no haptic effects: SDL's plain rumble,
         /// which goes straight to evdev FF_RUMBLE. Re-armed like the pad path,
         /// since a rumble lapses.
@@ -325,12 +325,6 @@ private:
 
     [[nodiscard]] s16 wheel_axis(int axis) const;
 
-    [[nodiscard]] bool device_matches(SDL_JoystickID id) const;
-    [[nodiscard]] bool is_configured_wheel(SDL_JoystickID id) const;
-    [[nodiscard]] bool claims_wheel(SDL_JoystickID id) const;
-
-    /// wheel_device names a device that is not plugged in, so it is ignored.
-    bool m_wheel_device_absent = false;
 
     void add_gamepad(SDL_JoystickID id);
     void remove_gamepad(SDL_JoystickID id);

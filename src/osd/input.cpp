@@ -316,21 +316,8 @@ bool Input::init(const WheelSettings& wheel)
 
     ids = SDL_GetJoysticks(&count);
     if (ids != nullptr) {
-        // A remembered event node may since have been given to another device.
-        if (!m_wheel_settings.device.empty()) {
-            m_wheel_device_absent = true;
-            for (int index = 0; index < count; ++index) {
-                if (device_matches(ids[index])) {
-                    m_wheel_device_absent = false;
-                }
-            }
-            if (m_wheel_device_absent) {
-                SM2_WARN("wheel_device %s is not present; detecting a wheel instead",
-                         m_wheel_settings.device.c_str());
-            }
-        }
         for (int index = 0; index < count; ++index) {
-            if (claims_wheel(ids[index])) {
+            if (is_wheel_typed(ids[index]) || !SDL_IsGamepad(ids[index])) {
                 add_wheel(ids[index]);
             }
         }
@@ -382,10 +369,7 @@ void Input::handle_event(const SDL_Event& event)
             remove_gamepad(event.gdevice.which);
             break;
         case SDL_EVENT_JOYSTICK_ADDED:
-            if (device_matches(event.jdevice.which)) {
-                m_wheel_device_absent = false;
-            }
-            if (claims_wheel(event.jdevice.which)) {
+            if (is_wheel_typed(event.jdevice.which) || !SDL_IsGamepad(event.jdevice.which)) {
                 add_wheel(event.jdevice.which);
             }
             break;
@@ -421,7 +405,7 @@ void Input::add_gamepad(SDL_JoystickID id)
                     [id](const Pad& pad) { return pad.id == id; })) {
         return;
     }
-    if (is_wheel_typed(id) || is_configured_wheel(id)) {
+    if (is_wheel_typed(id)) {
         SM2_DEBUG("joystick %u type=%d treated as a wheel, not a gamepad",
                   static_cast<unsigned>(id), static_cast<int>(SDL_GetJoystickTypeForID(id)));
         return;
@@ -479,28 +463,6 @@ SDL_Gamepad* Input::pad_for(u32 player) const
     return match != m_pads.end() ? match->handle : nullptr;
 }
 
-bool Input::device_matches(SDL_JoystickID id) const
-{
-    if (m_wheel_settings.device.empty()) {
-        return false;
-    }
-    const char* path = SDL_GetJoystickPathForID(id);
-    return path != nullptr && m_wheel_settings.device == path;
-}
-
-bool Input::is_configured_wheel(SDL_JoystickID id) const
-{
-    return !m_wheel_device_absent && device_matches(id);
-}
-
-bool Input::claims_wheel(SDL_JoystickID id) const
-{
-    if (!m_wheel_settings.device.empty() && !m_wheel_device_absent) {
-        return is_configured_wheel(id);
-    }
-    return is_wheel_typed(id) || !SDL_IsGamepad(id);
-}
-
 void Input::add_wheel(SDL_JoystickID id)
 {
     if (m_wheel.handle != nullptr) {
@@ -509,14 +471,9 @@ void Input::add_wheel(SDL_JoystickID id)
 
     // UNKNOWN passes: it only reaches here when nothing else claimed the device.
     // A named device skips the check, having whatever type uinput gave it.
-    if (!is_configured_wheel(id)) {
-        if (!m_wheel_settings.device.empty()) {
-            return;
-        }
-        const SDL_JoystickType type = SDL_GetJoystickTypeForID(id);
-        if (type != SDL_JOYSTICK_TYPE_WHEEL && type != SDL_JOYSTICK_TYPE_UNKNOWN) {
-            return;
-        }
+    const SDL_JoystickType type = SDL_GetJoystickTypeForID(id);
+    if (type != SDL_JOYSTICK_TYPE_WHEEL && type != SDL_JOYSTICK_TYPE_UNKNOWN) {
+        return;
     }
 
     SDL_Joystick* handle = SDL_OpenJoystick(id);
@@ -526,9 +483,11 @@ void Input::add_wheel(SDL_JoystickID id)
         return;
     }
 
-    m_wheel        = Wheel{};
-    m_wheel.handle = handle;
-    m_wheel.id     = id;
+    m_wheel            = Wheel{};
+    m_wheel.handle     = handle;
+    m_wheel.id         = id;
+    m_wheel.can_rumble = SDL_GetBooleanProperty(SDL_GetJoystickProperties(handle),
+                                                SDL_PROP_JOYSTICK_CAP_RUMBLE_BOOLEAN, false);
 
     // Axis roles: use the calibrated values when set, else auto-detect. Steering
     // self-centres (rests mid-travel) while a pedal rests hard at one end; axis 0
@@ -552,8 +511,6 @@ void Input::add_wheel(SDL_JoystickID id)
         for (int axis = 1; axis < axes; ++axis) {
             const int rest = static_cast<int>(wheel_axis(axis));
             const bool at_extreme = rest < -16384 || rest > 16384;
-            SM2_DEBUG("wheel axis %d rests at %d%s", axis, rest,
-                      at_extreme ? "" : " (not an extreme: not taken as a pedal)");
             if (!at_extreme) {
                 continue;
             }
@@ -592,10 +549,10 @@ void Input::add_wheel(SDL_JoystickID id)
             SDL_CloseHaptic(haptic);
         } else {
             m_wheel.haptic = haptic;
-            // Turn off the wheel's built-in autocentre and set full gain, or the
-            // device fights or scales our own force. (Supermodel does the same.)
-            SDL_SetHapticAutocenter(haptic, 0);
             SDL_SetHapticGain(haptic, 100);
+            // Centres the wheel until our spring has a position to work from.
+            SDL_SetHapticAutocenter(haptic, 50);
+            m_wheel.autocenter = true;
 
             SDL_HapticEffect effect{};
             effect.type                 = SDL_HAPTIC_CONSTANT;
@@ -735,16 +692,6 @@ bool Input::sample_wheel_channel(const rom::AnalogChannel& channel, u8* out) con
         *out = channel.reverse
                    ? static_cast<u8>(channel.maximum - (value - channel.minimum))
                    : value;
-        static int last_logged = -1;
-        if (std::abs(static_cast<int>(*out) - last_logged) >= 4) {
-            last_logged = *out;
-            SM2_DEBUG("steer: raw=%6d rest=%6d frac=%.3f -> 0x%02x",
-                      static_cast<int>(raw),
-                      axis < Wheel::kMaxAxes
-                          ? static_cast<int>(m_wheel.axis_rest[static_cast<usize>(axis)])
-                          : 0,
-                      static_cast<double>(fraction), *out);
-        }
         return true;
     }
 
@@ -946,8 +893,16 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
         const int steps = drive_force & 0x0f;          // 0..15
         const int mag   = steps * ceiling / 15;
 
-        const int deflection = static_cast<int>(
-            wheel_axis(m_wheel.steer_axis));  // -32768..32767
+        // An axis that has not reported yet says nothing about where the wheel is.
+        const bool steer_known =
+            m_wheel.steer_axis >= Wheel::kMaxAxes
+            || (m_wheel.axes_moved & (1u << m_wheel.steer_axis)) != 0;
+        if (steer_known && m_wheel.autocenter && m_wheel.haptic != nullptr) {
+            SDL_SetHapticAutocenter(m_wheel.haptic, 0);
+            m_wheel.autocenter = false;
+        }
+        const int deflection =
+            steer_known ? static_cast<int>(wheel_axis(m_wheel.steer_axis)) : 0;
 
         // A baseline centring spring is always present on a drive-board game, so
         // the wheel self-centres from the moment the emulator launches -- through
@@ -1052,8 +1007,12 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
     int rumble_now = std::max(rumble, (m_wheel.rumble_mag < 0 ? 0 : m_wheel.rumble_mag) * 4 / 5);
     rumble_now     = std::clamp(rumble_now, 0, 32767);
 
-    // Update the constant force (the push/centring) when it changes.
-    if (m_wheel.force_effect >= 0 && level != m_wheel.force_level) {
+    constexpr int kFeltChange = 256;
+    const auto worth_sending = [](int want, int sent) {
+        return (want == 0) != (sent == 0) || std::abs(want - sent) >= kFeltChange;
+    };
+
+    if (m_wheel.force_effect >= 0 && worth_sending(level, m_wheel.force_level)) {
         m_wheel.force_level = level;
         SDL_HapticEffect effect{};
         effect.type                      = SDL_HAPTIC_CONSTANT;
@@ -1061,14 +1020,13 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
         effect.constant.length           = SDL_HAPTIC_INFINITY;
         effect.constant.direction.type   = SDL_HAPTIC_CARTESIAN;
         effect.constant.direction.dir[0] = 0;
-        effect.constant.level            = static_cast<s16>(level);
+        // Negated so the force opposes the deflection and centres the wheel.
+        effect.constant.level            = static_cast<s16>(-level);
         SDL_UpdateHapticEffect(m_wheel.haptic, m_wheel.force_effect, &effect);
-        SDL_RunHapticEffect(m_wheel.haptic, m_wheel.force_effect, SDL_HAPTIC_INFINITY);
     }
 
-    // Update the periodic rumble (the vibration) when it changes.
     if (m_wheel.rumble_effect >= 0) {
-        if (rumble_now != m_wheel.rumble_mag) {
+        if (worth_sending(rumble_now, m_wheel.rumble_mag)) {
             m_wheel.rumble_mag = rumble_now;
             SDL_HapticEffect rmb{};
             rmb.type                     = SDL_HAPTIC_SINE;
@@ -1079,10 +1037,9 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
             rmb.periodic.magnitude       = static_cast<s16>(rumble_now);
             rmb.periodic.length          = SDL_HAPTIC_INFINITY;
             SDL_UpdateHapticEffect(m_wheel.haptic, m_wheel.rumble_effect, &rmb);
-            SDL_RunHapticEffect(m_wheel.haptic, m_wheel.rumble_effect, SDL_HAPTIC_INFINITY);
         }
-    } else {
-        // No haptic effects on this device, so fall back to plain rumble.
+    } else if (m_wheel.can_rumble) {
+        // A wheel has no rumble motors; its driver swings the steering instead.
         const auto low  = static_cast<u16>(std::clamp(rumble_now * 2, 0, 65535));
         const auto high = static_cast<u16>(std::clamp(rumble_now, 0, 65535));
         const bool changed = low != m_wheel.rumble_low || high != m_wheel.rumble_high;
@@ -1096,7 +1053,9 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
         m_wheel.rumble_mag = rumble_now;
     }
 
-    SM2_DEBUG("ffb: cmd=0x%02x level=%d rumble=%d", drive_force, level, rumble_now);
+    SM2_DEBUG("ffb: cmd=0x%02x steer=%d level=%d rumble=%d", drive_force,
+              m_wheel.steer_axis >= 0 ? static_cast<int>(wheel_axis(m_wheel.steer_axis)) : 0,
+              level, rumble_now);
 }
 
 namespace {
