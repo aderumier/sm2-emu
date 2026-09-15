@@ -316,8 +316,21 @@ bool Input::init(const WheelSettings& wheel)
 
     ids = SDL_GetJoysticks(&count);
     if (ids != nullptr) {
+        // A remembered event node may since have been given to another device.
+        if (!m_wheel_settings.device.empty()) {
+            m_wheel_device_absent = true;
+            for (int index = 0; index < count; ++index) {
+                if (device_matches(ids[index])) {
+                    m_wheel_device_absent = false;
+                }
+            }
+            if (m_wheel_device_absent) {
+                SM2_WARN("wheel_device %s is not present; detecting a wheel instead",
+                         m_wheel_settings.device.c_str());
+            }
+        }
         for (int index = 0; index < count; ++index) {
-            if (is_wheel_typed(ids[index]) || !SDL_IsGamepad(ids[index])) {
+            if (claims_wheel(ids[index])) {
                 add_wheel(ids[index]);
             }
         }
@@ -369,7 +382,10 @@ void Input::handle_event(const SDL_Event& event)
             remove_gamepad(event.gdevice.which);
             break;
         case SDL_EVENT_JOYSTICK_ADDED:
-            if (is_wheel_typed(event.jdevice.which) || !SDL_IsGamepad(event.jdevice.which)) {
+            if (device_matches(event.jdevice.which)) {
+                m_wheel_device_absent = false;
+            }
+            if (claims_wheel(event.jdevice.which)) {
                 add_wheel(event.jdevice.which);
             }
             break;
@@ -405,7 +421,7 @@ void Input::add_gamepad(SDL_JoystickID id)
                     [id](const Pad& pad) { return pad.id == id; })) {
         return;
     }
-    if (is_wheel_typed(id)) {
+    if (is_wheel_typed(id) || is_configured_wheel(id)) {
         SM2_DEBUG("joystick %u type=%d treated as a wheel, not a gamepad",
                   static_cast<unsigned>(id), static_cast<int>(SDL_GetJoystickTypeForID(id)));
         return;
@@ -463,17 +479,44 @@ SDL_Gamepad* Input::pad_for(u32 player) const
     return match != m_pads.end() ? match->handle : nullptr;
 }
 
+bool Input::device_matches(SDL_JoystickID id) const
+{
+    if (m_wheel_settings.device.empty()) {
+        return false;
+    }
+    const char* path = SDL_GetJoystickPathForID(id);
+    return path != nullptr && m_wheel_settings.device == path;
+}
+
+bool Input::is_configured_wheel(SDL_JoystickID id) const
+{
+    return !m_wheel_device_absent && device_matches(id);
+}
+
+bool Input::claims_wheel(SDL_JoystickID id) const
+{
+    if (!m_wheel_settings.device.empty() && !m_wheel_device_absent) {
+        return is_configured_wheel(id);
+    }
+    return is_wheel_typed(id) || !SDL_IsGamepad(id);
+}
+
 void Input::add_wheel(SDL_JoystickID id)
 {
     if (m_wheel.handle != nullptr) {
         return;  // One wheel, driving player one, is all a Model 2 cabinet wires.
     }
 
-    // Refuse a flightstick or arcade stick. UNKNOWN passes: it only reaches here
-    // when nothing else claimed the device.
-    const SDL_JoystickType type = SDL_GetJoystickTypeForID(id);
-    if (type != SDL_JOYSTICK_TYPE_WHEEL && type != SDL_JOYSTICK_TYPE_UNKNOWN) {
-        return;
+    // UNKNOWN passes: it only reaches here when nothing else claimed the device.
+    // A named device skips the check, having whatever type uinput gave it.
+    if (!is_configured_wheel(id)) {
+        if (!m_wheel_settings.device.empty()) {
+            return;
+        }
+        const SDL_JoystickType type = SDL_GetJoystickTypeForID(id);
+        if (type != SDL_JOYSTICK_TYPE_WHEEL && type != SDL_JOYSTICK_TYPE_UNKNOWN) {
+            return;
+        }
     }
 
     SDL_Joystick* handle = SDL_OpenJoystick(id);
@@ -663,6 +706,15 @@ bool Input::sample_wheel_channel(const rom::AnalogChannel& channel, u8* out) con
                           || channel.control == rom::AnalogControl::Bank
                           || channel.control == rom::AnalogControl::Handle;
     if (is_steering) {
+        // A wheel rarely rests at its exact midpoint and the scale below
+        // multiplies that offset. Ignore a rest far enough out to be a held wheel.
+        if (axis < Wheel::kMaxAxes) {
+            const int rest = static_cast<int>(m_wheel.axis_rest[static_cast<usize>(axis)]);
+            if (std::abs(rest) < 3000) {
+                fraction = static_cast<float>(static_cast<int>(raw) - rest + 32768) / 65535.0f;
+            }
+        }
+
         // steer_degrees is the wheel's own physical rotation range; lock_degrees
         // is the physical rotation (total) at which the game reaches full lock.
         // Mapping one onto the other makes full lock arrive after turning about
@@ -1017,8 +1069,7 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
             SDL_RunHapticEffect(m_wheel.haptic, m_wheel.rumble_effect, SDL_HAPTIC_INFINITY);
         }
     } else {
-        // No haptic effects on this device (SDL's Linux backend often reports a
-        // wheel as not haptic at all), so fall back to plain rumble.
+        // No haptic effects on this device, so fall back to plain rumble.
         const auto low  = static_cast<u16>(std::clamp(rumble_now * 2, 0, 65535));
         const auto high = static_cast<u16>(std::clamp(rumble_now, 0, 65535));
         const bool changed = low != m_wheel.rumble_low || high != m_wheel.rumble_high;

@@ -110,6 +110,9 @@ public:
         std::array<s32, Config::kWheelRoleCount> buttons =
             Config{}.wheel_buttons;
 
+        /// Event device to claim as the wheel; empty detects one.
+        std::string device;
+
         /// Wheel axis per analogue control, or -1 to auto-detect. Invert flags
         /// apply to a pedal that reads high released, low pressed.
         s32  steer_axis   = -1;
@@ -314,14 +317,20 @@ private:
         bool brake_invert = false;
 
         /// SDL reports 0 for an axis that has not sent an event yet, which on a
-        /// pedal is half pressed -- read as the brake held down. Until an axis
-        /// moves, hand back what it read when the wheel was opened.
+        /// pedal is half pressed. Until one moves, use its value read at open.
         static constexpr int      kMaxAxes = 8;
         std::array<s16, kMaxAxes> axis_rest{};
         u32                       axes_moved = 0;  ///< bitmask of axes seen moving.
     };
 
     [[nodiscard]] s16 wheel_axis(int axis) const;
+
+    [[nodiscard]] bool device_matches(SDL_JoystickID id) const;
+    [[nodiscard]] bool is_configured_wheel(SDL_JoystickID id) const;
+    [[nodiscard]] bool claims_wheel(SDL_JoystickID id) const;
+
+    /// wheel_device names a device that is not plugged in, so it is ignored.
+    bool m_wheel_device_absent = false;
 
     void add_gamepad(SDL_JoystickID id);
     void remove_gamepad(SDL_JoystickID id);

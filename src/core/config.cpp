@@ -528,6 +528,8 @@ bool load_config(const std::string& path, Config* out, std::vector<std::string>*
             if (!parse_u32(value, &out->wheel_steer_degrees)) {
                 bad_value();
             }
+        } else if (key == "wheel_device") {
+            out->wheel_device = value;
         } else if (key == "wheel_button_start") {
             if (!parse_s32(value, &out->wheel_buttons[cfg_role(Config::WheelRole::Start)])) {
                 bad_value();
@@ -774,6 +776,8 @@ bool save_config(const std::string& path, const Config& config)
         << "# Physical rotation (total) at which the game reaches full lock;\n"
         << "# lower is more sensitive. 180..270.\n"
         << "wheel_lock_degrees = " << config.wheel_lock_degrees << "\n"
+        << "# Event device to use as the wheel; empty detects one.\n"
+        << "wheel_device = " << config.wheel_device << "\n"
         << "# Which wheel button drives each control (numbering varies by wheel;\n"
         << "# -1 unbinds). Set these in the GUI's Wheel tab. Buttons 1..4 are the\n"
         << "# arcade buttons, which is where a cabinet's VR/view buttons land too.\n"
