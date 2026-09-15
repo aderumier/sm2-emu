@@ -776,8 +776,10 @@ void Gui::draw_wheel_tab(Config& config, Input* input)
         resistance = ((resistance + 5) / 10) * 10;  // snap to 10 % steps
         config.wheel_ffb_strength = static_cast<u32>(std::clamp(resistance, 0, 100));
     }
+    ImGui::EndDisabled();
 
     // Synthetic engine/road rumble, since the game streams no continuous buzz.
+    // Stands on its own: a wheel with no usable force feedback can still rumble.
     ImGui::Checkbox("Rumble", &config.wheel_rumble);
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
@@ -792,7 +794,6 @@ void Gui::draw_wheel_tab(Config& config, Input* input)
         rumble = ((rumble + 5) / 10) * 10;
         config.wheel_rumble_strength = static_cast<u32>(std::clamp(rumble, 0, 100));
     }
-    ImGui::EndDisabled();
     ImGui::EndDisabled();
 
     // Common wheel rotation ranges rather than a free slider: a wheel is set to

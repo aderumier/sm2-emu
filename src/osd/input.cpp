@@ -542,7 +542,8 @@ void Input::add_wheel(SDL_JoystickID id)
     if (m_wheel_settings.ffb) {
         SDL_Haptic* haptic = SDL_OpenHapticFromJoystick(handle);
         if (haptic == nullptr) {
-            SM2_INFO("wheel has no force feedback: %s", SDL_GetError());
+            SM2_INFO("wheel has no haptic effects (%s); using plain rumble",
+                     SDL_GetError());
         } else if ((SDL_GetHapticFeatures(haptic) & SDL_HAPTIC_CONSTANT) == 0) {
             SM2_INFO("wheel force feedback lacks a constant-force effect; leaving it limp");
             SDL_CloseHaptic(haptic);
@@ -855,7 +856,7 @@ s32 Input::captured_axis(const s16* baseline, int count, bool* positive) const
 
 void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
 {
-    if (m_wheel.haptic == nullptr || m_wheel.force_effect < 0 || m_wheel.steer_axis < 0) {
+    if (m_wheel.handle == nullptr) {
         return;
     }
 
@@ -873,7 +874,7 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
     // negative level pushes the wheel right, a positive level pushes it left.
     int level  = 0;
     int rumble = 0;   // periodic-effect magnitude, felt as a buzz not a push
-    if (game.has_steering() && m_wheel_settings.ffb) {
+    if (game.has_steering() && m_wheel_settings.ffb && m_wheel.steer_axis >= 0) {
         const int ceiling = static_cast<int>(
             std::clamp(m_wheel_settings.strength, 0u, 100u) * 32767 / 100);
         const int cmd   = drive_force & 0xf0;
@@ -965,8 +966,7 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
     // gas. This is a feel, not replayed game data, with its own on/off + strength.
     // Kept deliberately subtle: even at full strength it is a fraction of the
     // device maximum, so it reads as an engine hum rather than a jackhammer.
-    if (game.has_steering() && m_wheel_settings.ffb && m_wheel_settings.rumble
-        && m_wheel.accel_axis >= 0) {
+    if (game.has_steering() && m_wheel_settings.rumble && m_wheel.accel_axis >= 0) {
         // Full strength maps to ~12% of the device max at full throttle; the
         // G923's motor is strong, so even a small sine magnitude is plenty.
         const int rmax = static_cast<int>(
@@ -988,7 +988,7 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
     rumble_now     = std::clamp(rumble_now, 0, 32767);
 
     // Update the constant force (the push/centring) when it changes.
-    if (level != m_wheel.force_level) {
+    if (m_wheel.force_effect >= 0 && level != m_wheel.force_level) {
         m_wheel.force_level = level;
         SDL_HapticEffect effect{};
         effect.type                      = SDL_HAPTIC_CONSTANT;
@@ -1002,18 +1002,34 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
     }
 
     // Update the periodic rumble (the vibration) when it changes.
-    if (m_wheel.rumble_effect >= 0 && rumble_now != m_wheel.rumble_mag) {
+    if (m_wheel.rumble_effect >= 0) {
+        if (rumble_now != m_wheel.rumble_mag) {
+            m_wheel.rumble_mag = rumble_now;
+            SDL_HapticEffect rmb{};
+            rmb.type                     = SDL_HAPTIC_SINE;
+            rmb.periodic.type            = SDL_HAPTIC_SINE;
+            rmb.periodic.direction.type  = SDL_HAPTIC_CARTESIAN;
+            rmb.periodic.direction.dir[0] = 1;
+            rmb.periodic.period          = 20;   // ~50 Hz, a punchier buzz
+            rmb.periodic.magnitude       = static_cast<s16>(rumble_now);
+            rmb.periodic.length          = SDL_HAPTIC_INFINITY;
+            SDL_UpdateHapticEffect(m_wheel.haptic, m_wheel.rumble_effect, &rmb);
+            SDL_RunHapticEffect(m_wheel.haptic, m_wheel.rumble_effect, SDL_HAPTIC_INFINITY);
+        }
+    } else {
+        // No haptic effects on this device (SDL's Linux backend often reports a
+        // wheel as not haptic at all), so fall back to plain rumble.
+        const auto low  = static_cast<u16>(std::clamp(rumble_now * 2, 0, 65535));
+        const auto high = static_cast<u16>(std::clamp(rumble_now, 0, 65535));
+        const bool changed = low != m_wheel.rumble_low || high != m_wheel.rumble_high;
+        const bool stale   = (low != 0 || high != 0) && ++m_wheel.rumble_age >= 4;
+        if (changed || stale) {
+            SDL_RumbleJoystick(m_wheel.handle, low, high, 250);
+            m_wheel.rumble_low  = low;
+            m_wheel.rumble_high = high;
+            m_wheel.rumble_age  = 0;
+        }
         m_wheel.rumble_mag = rumble_now;
-        SDL_HapticEffect rmb{};
-        rmb.type                     = SDL_HAPTIC_SINE;
-        rmb.periodic.type            = SDL_HAPTIC_SINE;
-        rmb.periodic.direction.type  = SDL_HAPTIC_CARTESIAN;
-        rmb.periodic.direction.dir[0] = 1;
-        rmb.periodic.period          = 20;   // ~50 Hz, a punchier buzz
-        rmb.periodic.magnitude       = static_cast<s16>(rumble_now);
-        rmb.periodic.length          = SDL_HAPTIC_INFINITY;
-        SDL_UpdateHapticEffect(m_wheel.haptic, m_wheel.rumble_effect, &rmb);
-        SDL_RunHapticEffect(m_wheel.haptic, m_wheel.rumble_effect, SDL_HAPTIC_INFINITY);
     }
 
     SM2_DEBUG("ffb: cmd=0x%02x level=%d rumble=%d", drive_force, level, rumble_now);

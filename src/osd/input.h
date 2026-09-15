@@ -292,6 +292,13 @@ private:
         int            rumble_effect = -1;
         int            rumble_mag    = -1;  ///< last rumble magnitude, to skip no-ops.
 
+        /// Fallback when the device has no haptic effects: SDL's plain rumble,
+        /// which goes straight to evdev FF_RUMBLE. Re-armed like the pad path,
+        /// since a rumble lapses.
+        u16            rumble_low  = 0;
+        u16            rumble_high = 0;
+        int            rumble_age  = 0;
+
         /// How many consecutive frames a one-directional constant force has been
         /// held, to decay a sustained crash push so a free-spinning PC wheel does
         /// not whip to the stop the way the cabinet's heavy wheel never could.
