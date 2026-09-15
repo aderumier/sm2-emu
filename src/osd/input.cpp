@@ -648,8 +648,18 @@ void Input::remove_wheel(SDL_JoystickID id)
         return;
     }
     if (m_wheel.haptic != nullptr) {
-        SDL_CloseHaptic(m_wheel.haptic);  // Frees its effects too.
+        // Remove all effects on close
+        for (const int effect : {m_wheel.rumble_effect, m_wheel.force_effect}) {
+            if (effect >= 0) {
+                SDL_StopHapticEffect(m_wheel.haptic, effect);
+                SDL_DestroyHapticEffect(m_wheel.haptic, effect);
+            }
+        }
+        SDL_StopHapticEffects(m_wheel.haptic);
+        SDL_SetHapticAutocenter(m_wheel.haptic, 50);  // hand it back self-centring
+        SDL_CloseHaptic(m_wheel.haptic);
     }
+    SDL_RumbleJoystick(m_wheel.handle, 0, 0, 0);
     SDL_CloseJoystick(m_wheel.handle);
     m_wheel = Wheel{};
 }
@@ -706,13 +716,9 @@ bool Input::sample_wheel_channel(const rom::AnalogChannel& channel, u8* out) con
                           || channel.control == rom::AnalogControl::Bank
                           || channel.control == rom::AnalogControl::Handle;
     if (is_steering) {
-        // A wheel rarely rests at its exact midpoint and the scale below
-        // multiplies that offset. Ignore a rest far enough out to be a held wheel.
-        if (axis < Wheel::kMaxAxes) {
-            const int rest = static_cast<int>(m_wheel.axis_rest[static_cast<usize>(axis)]);
-            if (std::abs(rest) < 3000) {
-                fraction = static_cast<float>(static_cast<int>(raw) - rest + 32768) / 65535.0f;
-            }
+        // Centre the wheel
+        if (axis < Wheel::kMaxAxes && (m_wheel.axes_moved & (1u << axis)) == 0) {
+            fraction = 0.5f;
         }
 
         // steer_degrees is the wheel's own physical rotation range; lock_degrees
@@ -729,6 +735,16 @@ bool Input::sample_wheel_channel(const rom::AnalogChannel& channel, u8* out) con
         *out = channel.reverse
                    ? static_cast<u8>(channel.maximum - (value - channel.minimum))
                    : value;
+        static int last_logged = -1;
+        if (std::abs(static_cast<int>(*out) - last_logged) >= 4) {
+            last_logged = *out;
+            SM2_DEBUG("steer: raw=%6d rest=%6d frac=%.3f -> 0x%02x",
+                      static_cast<int>(raw),
+                      axis < Wheel::kMaxAxes
+                          ? static_cast<int>(m_wheel.axis_rest[static_cast<usize>(axis)])
+                          : 0,
+                      static_cast<double>(fraction), *out);
+        }
         return true;
     }
 
@@ -921,9 +937,6 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
     //   0x3x  centring spring, strength = level (board recentres from position)
     //   0x2x  a weaker force/friction, treated like a light centring
     //   0x1x  no effect;  0x0x / 0x7x  boot/handshake
-    // The board's own motor sign convention is unknown, so the mapping to SDL's
-    // cartesian level was chosen to match the previous working spring: a
-    // negative level pushes the wheel right, a positive level pushes it left.
     int level  = 0;
     int rumble = 0;   // periodic-effect magnitude, felt as a buzz not a push
     if (game.has_steering() && m_wheel_settings.ffb && m_wheel.steer_axis >= 0) {
