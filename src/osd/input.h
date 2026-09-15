@@ -300,10 +300,21 @@ private:
 
         /// Axis numbers on the device. Steering is the self-centring one;
         /// the pedals rest at one end. -1 means the device lacks it.
-        int steer_axis = -1;
-        int accel_axis = -1;
-        int brake_axis = -1;
+        int  steer_axis   = -1;
+        int  accel_axis   = -1;
+        int  brake_axis   = -1;
+        bool accel_invert = false;
+        bool brake_invert = false;
+
+        /// SDL reports 0 for an axis that has not sent an event yet, which on a
+        /// pedal is half pressed -- read as the brake held down. Until an axis
+        /// moves, hand back what it read when the wheel was opened.
+        static constexpr int      kMaxAxes = 8;
+        std::array<s16, kMaxAxes> axis_rest{};
+        u32                       axes_moved = 0;  ///< bitmask of axes seen moving.
     };
+
+    [[nodiscard]] s16 wheel_axis(int axis) const;
 
     void add_gamepad(SDL_JoystickID id);
     void remove_gamepad(SDL_JoystickID id);
@@ -334,11 +345,12 @@ private:
     Wheel            m_wheel;
     WheelSettings    m_wheel_settings;
 
-    /// Sequential-shifter state for a wheel's paddles. The cabinet's gearbox is a
-    /// five-position gate (four gears + reverse); paddles shift up and down
-    /// through it. Mutable because poll() is const but must remember the gear
-    /// between frames and fire once per press, not once per frame held.
-    mutable u32  m_wheel_gear      = 0;      ///< 0..4 = gears 1..4, reverse.
+    /// Sequential-shifter state for a wheel's paddles, seeded from the game's
+    /// start_gear and re-seeded when another game is loaded. Mutable because
+    /// poll() is const but must remember the gear between frames and fire once
+    /// per press, not once per frame held.
+    mutable u32         m_wheel_gear = 1;    ///< 0 = neutral, 1..4 = the gears.
+    mutable std::string m_gear_game;         ///< game the gate was seeded for.
     mutable bool m_gear_up_held    = false;
     mutable bool m_gear_down_held  = false;
 

@@ -369,7 +369,15 @@ bool GameDatabase::load(const std::string& path)
             || !attribute_bool(game_node, "motion_base", false, &game.motion_base,
                                context.c_str())
             || !attribute_bool(game_node, "gun_missile", false, &game.gun_missile,
-                               context.c_str())) {
+                               context.c_str())
+            || !attribute_integer(game_node, "start_gear", 1, &game.start_gear,
+                                  context.c_str())) {
+            return false;
+        }
+
+        if (game.start_gear > 4) {
+            SM2_ERROR("%s: start_gear %u is not a gate position (0 = N, 1..4)",
+                      context.c_str(), game.start_gear);
             return false;
         }
 
@@ -721,6 +729,7 @@ bool GameDatabase::merge_clones(const std::set<std::string>& board_inherited)
         if (!declares_analog)          { game.analog = parent.analog; }
         if (!game.lightgun.present)    { game.lightgun = parent.lightgun; }
         if (!game.gearbox)             { game.gearbox = parent.gearbox; }
+        if (game.start_gear == 1)      { game.start_gear = parent.start_gear; }
         if (!game.shift_buttons)       { game.shift_buttons = parent.shift_buttons; }
         if (!game.drive_board)         { game.drive_board = parent.drive_board; }
         if (!game.motion_base)         { game.motion_base = parent.motion_base; }
