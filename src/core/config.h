@@ -80,6 +80,10 @@ struct Config {
     /// Show the FPS counter overlay in the top-right corner.
     bool show_fps = false;
 
+    /// Show brief on-screen notifications (e.g. "State saved"), top-centered,
+    /// while gameplay continues. On by default.
+    bool show_notifications = true;
+
     /// Light-gun mode: draw the aiming crosshair(s) and hide the OS mouse cursor
     /// over the window, for the gun titles. Off leaves the crosshair hidden and
     /// the cursor visible (aiming still works, it is just not shown).
@@ -275,6 +279,11 @@ struct Config {
     /// Game-picker art/metadata cache. Always derived as `<config dir>/artwork` by
     /// resolve_default_paths(). A runtime field only, for the picker to read.
     std::string artwork_dir;
+
+    /// Save states: per-game `<game>.<slot>.sm2state`. Derived as
+    /// `<data dir>/states` by resolve_default_paths(); a runtime field only, not
+    /// persisted in the ini (a save state has no reason to be relocatable).
+    std::string states_dir;
 
     // -- library -----------------------------------------------------------
 

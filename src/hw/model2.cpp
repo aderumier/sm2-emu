@@ -21,7 +21,9 @@
 
 #include "hw/model2.h"
 
+#include "core/archive.h"
 #include "core/log.h"
+#include "hw/save_state_io.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -361,6 +363,7 @@ void Model2::run_frame()
     // (it runs inside m_cpu.run() on an empty-FIFO read); the copro figure is
     // only step_copro()'s scheduled share.
     reset_core_profile();
+    m_in_frame = true;
 
     for (u32 line = 0; line < kVerticalTotal; ++line) {
         const u64 line_end   = m_frame_start + static_cast<u64>(line + 1) * kCyclesPerLine;
@@ -445,6 +448,7 @@ void Model2::run_frame()
 
     m_frame_start += kCyclesPerFrame;
     ++m_frames;
+    m_in_frame = false;
 }
 
 void Model2::step_copro(u32 host_cycles)
@@ -1644,6 +1648,95 @@ void Model2::save_nvram() const
     }
 
     (void)m_eeprom.save((base / (m_game.name + ".eeprom")).string());
+}
+
+// ---------------------------------------------------------------------------
+// Save states
+// ---------------------------------------------------------------------------
+
+void Model2::serialize(Archive& ar)
+{
+    // Same walk as Model2C (see model2c.cpp); the coprocessor is the MB86233
+    // TGP, and this board also carries the DOA compression chip / RAM.
+    m_cpu.serialize(ar);
+    m_copro.serialize(ar);
+    m_sound.serialize(ar);
+    m_io.serialize(ar);
+    m_eeprom.serialize(ar);
+    m_video.serialize(ar);
+    m_geometry.serialize(ar);
+    m_comm.serialize(ar);
+    m_uart.serialize(ar);
+    m_crypt.serialize(ar);
+    m_doa_comp.serialize(ar);
+
+    ar.bytes(m_work_ram.data(), m_work_ram.size());
+    ar.bytes(m_scratch_ram.data(), m_scratch_ram.size());
+    ar.bytes(m_buffer_ram.data(), m_buffer_ram.size());
+    ar.bytes(m_tile_ram.data(), m_tile_ram.size());
+    ar.bytes(m_char_ram.data(), m_char_ram.size());
+    ar.bytes(m_palette_ram.data(), m_palette_ram.size());
+    ar.bytes(m_colorxlat.data(), m_colorxlat.size());
+    ar.bytes(m_luma_ram.data(), m_luma_ram.size());
+    ar.bytes(m_texture_ram0.data(), m_texture_ram0.size());
+    ar.bytes(m_texture_ram1.data(), m_texture_ram1.size());
+    ar.bytes(m_framebuffer_a.data(), m_framebuffer_a.size());
+    ar.bytes(m_framebuffer_b.data(), m_framebuffer_b.size());
+    ar.bytes(m_nvram.data(), m_nvram.size());
+    ar.bytes(m_cpu_control.data(), m_cpu_control.size());
+    ar.bytes(m_comm_ram.data(), m_comm_ram.size());
+    ar.bytes(m_doa_ram.data(), m_doa_ram.size());
+    ar.bytes(m_crypt_ram.data(), m_crypt_ram.size());
+
+    ar.raw(m_intreq);
+    ar.raw(m_intena);
+    for (Timer& timer : m_timers) {
+        ar.raw(timer);
+    }
+    ar.raw(m_videocontrol);
+    ar.raw(m_render_mode);
+    ar.raw(m_render_test);
+    ar.raw(m_render_unk);
+    ar.raw(m_geoctl);
+    ar.raw(m_geocnt);
+    ar.raw(m_geo_write_start_address);
+    ar.raw(m_geo_read_start_address);
+    ar.raw(m_ctrlmode);
+    ar.raw(m_lightgun_mux);
+    ar.raw(m_gear_selected);
+    ar.raw(m_drive_board_latch);
+    ar.raw(m_palette_dirty);
+    ar.raw(m_doa_unk_toggle);
+    ar.raw(m_cycles);
+    ar.raw(m_frame_start);
+    ar.raw(m_frames);
+    ar.raw(m_pending_intena);
+    ar.raw(m_pending_intena_cycle);
+    ar.raw(m_pending_intena_valid);
+    ar.raw(m_copro_debt);
+    ar.raw(m_inputs);
+}
+
+bool Model2::save_state(const std::string& path) const
+{
+    auto* self = const_cast<Model2*>(this);
+    return save_state_to_file(path, m_game.name, static_cast<u32>(m_game.board),
+                              m_in_frame, [self](Archive& ar) { self->serialize(ar); });
+}
+
+bool Model2::load_state(const std::string& path)
+{
+    if (!load_state_from_file(path, m_game.name, static_cast<u32>(m_game.board),
+                              m_in_frame, [this](Archive& ar) { serialize(ar); })) {
+        return false;
+    }
+    ++m_texture_generation;
+    ++m_table_generation;
+    ++m_tile_generation;
+    ++m_char_generation;
+    m_palette_dirty = true;
+    m_render_list.clear();
+    return true;
 }
 
 }  // namespace sm2::hw

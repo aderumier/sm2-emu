@@ -105,6 +105,46 @@ public:
     };
     void set_link_status(const LinkStatus& status) { m_link_status = status; }
 
+    // -- save states -------------------------------------------------------
+
+    /// One save-state slot for the States tab, fed each frame so the GUI need
+    /// not depend on the hw:: types (mirrors hw::SlotInfo).
+    struct StateSlot {
+        std::string label;       ///< "Quick", "Slot 1", ...
+        std::string slot;        ///< the slot key: "quick", "1", ...
+        bool        occupied = false;
+        std::string timestamp;   ///< local time when occupied, else empty
+    };
+
+    /// Feed this game's slots (and whether a game is loaded at all) each frame.
+    /// An empty list / not-loaded hides the tab's contents.
+    void set_state_slots(bool game_loaded, std::vector<StateSlot> slots)
+    {
+        m_state_game_loaded = game_loaded;
+        m_state_slots       = std::move(slots);
+    }
+
+    /// A save/load/delete the user asked for via the States tab since the last
+    /// call, or nullopt. Polled by the main loop and serviced between frames.
+    struct StateRequest {
+        enum class Action { Save, Load, Delete };
+        Action      action = Action::Save;
+        std::string slot;
+    };
+    [[nodiscard]] std::optional<StateRequest> take_pending_state_request()
+    {
+        auto out = m_pending_state_request;
+        m_pending_state_request.reset();
+        return out;
+    }
+
+    // -- on-screen notifications -------------------------------------------
+
+    /// Show a brief top-centered message for a couple of seconds while gameplay
+    /// continues (e.g. "State saved"). Gated by config.show_notifications in
+    /// draw(); calling this is harmless when they are off.
+    void notify(std::string message);
+
     /// GPU capabilities for gating the enhancement options, fed each frame so
     /// the GUI need not include the render backend header. Defaults leave the
     /// opt-in enhancements unavailable until a backend reports otherwise.
@@ -173,9 +213,11 @@ private:
     void draw_gamepad_tab(Config& config, class Input* input);
     void draw_lightgun_tab(Config& config, class Input* input);
     void draw_network_tab(Config& config);
+    void draw_states_tab();
     void draw_dir_picker_popup(Config& config);
     void draw_status_bar(float measured_hz);
     void draw_fps_overlay(float measured_hz, const char* renderer_label);
+    void draw_notification();
     void draw_crosshairs(const class Input* input);
     void draw_sinden_border(const Config& config);
 
@@ -227,6 +269,15 @@ private:
 
     // -- cabinet link status -----------------------------------------------
     LinkStatus m_link_status;
+
+    // -- save-state slots (States tab) -------------------------------------
+    bool                        m_state_game_loaded = false;
+    std::vector<StateSlot>      m_state_slots;
+    std::optional<StateRequest> m_pending_state_request;
+
+    // -- on-screen notification (transient top-centered toast) -------------
+    std::string m_notify_text;
+    float       m_notify_seconds_left = 0.0f;  ///< counts down by DeltaTime
 
     // -- directory picker state (Paths tab "Browse..." buttons) -------------
     // Self-drawn (std::filesystem only), avoiding a native-dialog dependency.

@@ -219,6 +219,22 @@ public:
     virtual void load_nvram()                                      = 0;
     virtual void save_nvram() const                                = 0;
 
+    /// Snapshot the whole machine to `path` / restore it. Both must be called
+    /// only between frames (see run_frame). Default: unsupported, so a board
+    /// that has not implemented save-states yet returns false rather than
+    /// failing to compile. Return false on any error, leaving a running machine
+    /// untouched on a failed load.
+    [[nodiscard]] virtual bool save_state(const std::string& path) const
+    {
+        (void)path;
+        return false;
+    }
+    [[nodiscard]] virtual bool load_state(const std::string& path)
+    {
+        (void)path;
+        return false;
+    }
+
     // -- main CPU status, for the boot-test report ------------------------
 
     [[nodiscard]] virtual CpuStatus main_cpu_status() const = 0;

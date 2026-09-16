@@ -298,6 +298,11 @@ void resolve_default_paths(Config* config, bool config_in_cwd,
     if (config->screenshot_dir.empty()) {
         config->screenshot_dir = (base / "screenshots").string();
     }
+    // Save states live in a `states` subdirectory of the saves directory, so a
+    // user who relocates their saves (--nvram / nvram_dir) takes their states
+    // with them. Derived from the now-final nvram_dir; a runtime field only,
+    // not read from or written to the ini.
+    config->states_dir = (std::filesystem::path(config->nvram_dir) / "states").string();
     // Artwork always sits beside the config file; not user-adjustable, so set
     // unconditionally (never read from the ini).
     {
@@ -361,6 +366,10 @@ bool load_config(const std::string& path, Config* out, std::vector<std::string>*
             }
         } else if (key == "show_fps") {
             if (!parse_bool(value, &out->show_fps)) {
+                bad_value();
+            }
+        } else if (key == "show_notifications") {
+            if (!parse_bool(value, &out->show_notifications)) {
                 bad_value();
             }
         } else if (key == "lightgun") {
@@ -685,6 +694,7 @@ bool save_config(const std::string& path, const Config& config)
         << "\n"
         << "fullscreen = " << bool_text(config.fullscreen) << "\n"
         << "show_fps = " << bool_text(config.show_fps) << "\n"
+        << "show_notifications = " << bool_text(config.show_notifications) << "\n"
         << "lightgun = " << bool_text(config.lightgun) << "\n"
         << "lightgun_crosshair = " << bool_text(config.lightgun_crosshair) << "\n"
         << "lightgun_recoil = " << bool_text(config.lightgun_recoil) << "\n"

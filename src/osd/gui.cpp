@@ -176,6 +176,14 @@ bool Gui::draw(Config& config, const std::vector<std::string>& gpu_names,
         draw_fps_overlay(measured_hz, renderer_label);
     }
 
+    // A notification (state saved/loaded), top-centered, over gameplay.
+    if (m_notify_seconds_left > 0.0f) {
+        m_notify_seconds_left -= ImGui::GetIO().DeltaTime;
+        if (config.show_notifications) {
+            draw_notification();
+        }
+    }
+
     // In light-gun mode draw the aiming crosshair(s) and hide the OS cursor, so
     // only the crosshair is visible. gun_aims() is inactive for non-gun titles,
     // so a non-gun game shows nothing even with the mode on.
@@ -263,6 +271,7 @@ void Gui::draw_menu_bar(Config& config)
             ImGui::MenuItem("Vsync", nullptr, &config.vsync);
             ImGui::MenuItem("Fullscreen", nullptr, &config.fullscreen);
             ImGui::MenuItem("FPS counter", nullptr, &config.show_fps);
+            ImGui::MenuItem("On-screen notifications", nullptr, &config.show_notifications);
             ImGui::MenuItem("Light-gun mode", nullptr, &config.lightgun);
             ImGui::EndMenu();
         }
@@ -312,6 +321,8 @@ void Gui::draw_settings(Config& config, const std::vector<std::string>& gpu_name
 
             ImGui::Checkbox("Fullscreen", &config.fullscreen);
             ImGui::Checkbox("FPS counter", &config.show_fps);
+            ImGui::SameLine();
+            ImGui::Checkbox("Notifications", &config.show_notifications);
 
             if (!gpu_names.empty()) {
                 ImGui::Separator();
@@ -661,6 +672,12 @@ void Gui::draw_settings(Config& config, const std::vector<std::string>& gpu_name
         // -- Network tab -----------------------------------------------------
         if (ImGui::BeginTabItem("Network")) {
             draw_network_tab(config);
+            ImGui::EndTabItem();
+        }
+
+        // -- States tab ----------------------------------------------------
+        if (ImGui::BeginTabItem("States")) {
+            draw_states_tab();
             ImGui::EndTabItem();
         }
 
@@ -1256,6 +1273,69 @@ void Gui::draw_network_tab(Config& config)
 }
 
 // ---------------------------------------------------------------------------
+// States tab (save / load per-game slots)
+// ---------------------------------------------------------------------------
+
+void Gui::draw_states_tab()
+{
+    if (!m_state_game_loaded) {
+        ImGui::TextDisabled("Load a game to save and restore its state.");
+        return;
+    }
+
+    ImGui::TextWrapped(
+        "Save the whole machine to a slot and restore it later. Quick-save is "
+        "F6, quick-load is F7.");
+    ImGui::Spacing();
+
+    // A table so the three buttons always fit regardless of the overlay width,
+    // rather than fixed SameLine() offsets that push them off the right edge.
+    constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingStretchProp;
+    if (ImGui::BeginTable("states", 3, kFlags)) {
+        ImGui::TableSetupColumn("slot", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("actions", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+
+        for (const StateSlot& s : m_state_slots) {
+            ImGui::PushID(s.slot.c_str());
+            ImGui::TableNextRow();
+
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(s.label.c_str());
+
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            if (s.occupied) {
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s",
+                                   s.timestamp.c_str());
+            } else {
+                ImGui::TextDisabled("empty");
+            }
+
+            ImGui::TableNextColumn();
+            if (ImGui::Button("Save")) {
+                m_pending_state_request = StateRequest{StateRequest::Action::Save, s.slot};
+            }
+            ImGui::SameLine();
+            // Load and Delete only make sense on an occupied slot.
+            ImGui::BeginDisabled(!s.occupied);
+            if (ImGui::Button("Load")) {
+                m_pending_state_request = StateRequest{StateRequest::Action::Load, s.slot};
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Delete")) {
+                m_pending_state_request = StateRequest{StateRequest::Action::Delete, s.slot};
+            }
+            ImGui::EndDisabled();
+
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FPS overlay (top right, always on)
 // ---------------------------------------------------------------------------
 
@@ -1289,6 +1369,52 @@ void Gui::draw_fps_overlay(float measured_hz, const char* renderer_label)
     }
     ImGui::End();
     ImGui::PopStyleVar();
+}
+
+// ---------------------------------------------------------------------------
+// On-screen notification (transient toast, top-centered)
+// ---------------------------------------------------------------------------
+
+void Gui::notify(std::string message)
+{
+    m_notify_text         = std::move(message);
+    m_notify_seconds_left = 2.0f;  // a couple of seconds, per the request
+}
+
+void Gui::draw_notification()
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    // Same font and size as the FPS overlay (the default font, no scaling),
+    // top-centered rather than top-right.
+    const ImVec2 text_size = ImGui::CalcTextSize(m_notify_text.c_str());
+    const ImVec2 padding{8.0F, 4.0F};
+    const ImVec2 window_size{text_size.x + padding.x * 2.0F, text_size.y + padding.y * 2.0F};
+
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - window_size.x) * 0.5F,
+               viewport->WorkPos.y + 10.0F));
+    ImGui::SetNextWindowSize(window_size);
+
+    // Fade out over the last half-second so it does not just blink off.
+    float alpha = 0.55F;
+    if (m_notify_seconds_left < 0.5F) {
+        alpha *= m_notify_seconds_left / 0.5F;
+    }
+    ImGui::SetNextWindowBgAlpha(alpha);
+
+    constexpr ImGuiWindowFlags kFlags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove
+        | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+        | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha / 0.55F);
+    if (ImGui::Begin("##Notification", nullptr, kFlags)) {
+        ImGui::TextUnformatted(m_notify_text.c_str());
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
 }
 
 // ---------------------------------------------------------------------------

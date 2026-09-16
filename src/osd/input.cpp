@@ -2281,6 +2281,7 @@ void Input::print_bindings()
     std::printf("  Escape               quit\n");
     std::printf("  P                    pause\n");
     std::printf("  Tab (held)           fast-forward\n");
+    std::printf("  F6 F7                quick-save, quick-load state (more slots in F10)\n");
     std::printf("  F10 F11 F12          settings menu, fullscreen, screenshot\n");
     std::printf("\nVirtual On (keyboard): WASD left lever, arrows right lever,\n");
     std::printf("Q/E left shot/dash, Right Shift/Right Ctrl right shot/dash.\n");

@@ -18,6 +18,7 @@
 # ---------------------------------------------------------------------------
 
 add_library(sm2_core STATIC
+    core/archive.cpp
     core/config.cpp
     core/log.cpp
     core/net.cpp
@@ -237,6 +238,7 @@ add_library(sm2_hw STATIC
     hw/model2_softrender.cpp
     hw/model2_video.cpp
     hw/msm6253.cpp
+    hw/save_state_io.cpp
     hw/sega_315_5338a.cpp
     hw/sega_315_5838_comp.cpp
     hw/sega_315_5881_crypt.cpp

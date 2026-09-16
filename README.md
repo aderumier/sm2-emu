@@ -219,6 +219,7 @@ the operator controls stay reachable without a pad:
 | Arrows + `Left Ctrl` | Aim + fire on gun titles (no mouse needed) |
 | `Escape` | Return to the game picker (quits if launched with no picker) |
 | `P` | Pause |
+| `F6` / `F7` | Quick-save / quick-load the current game's state |
 | `F9` | Quit |
 | `F10` | Toggle the settings menu |
 | `F11` | Toggle fullscreen (`Cmd+F` on macOS, where the OS reserves F11) |
@@ -246,6 +247,24 @@ in the settings overlay (`F10`):
   including on-screen recoil for guns with a motor and an optional Sinden border if necessary;
   the mouse remains the fallback aiming device on every platform.
 - **Gamepad rumble** on the driving games, driven from the emulated drive board.
+
+### Save states
+
+A save state captures the entire machine so a later load resumes from the exact
+instant it was taken. Press `F6` to quick-save and `F7` to quick-load; both use a
+single reserved slot, and a new quick-save overwrites the previous quick-save.
+
+For more than one state per game, open the **States** tab in the settings overlay
+(`F10`). Each game has the quick slot plus four numbered slots, and every slot
+has **Save**, **Load** and **Delete** buttons alongside the time it was last
+written. Each save and load is confirmed by a brief message at the top of the
+screen, which can be turned off via the Notifications checkbox in the **Video** tab.
+
+Each slot is a file named `<game>.<slot>.sm2state`, kept in a `states`
+subdirectory of your saves directory, so relocating your saves (with `--nvram`
+or `nvram_dir`) moves the states with them. By default that is
+`~/Library/Application Support/sm2-emu/saves/states` on macOS and
+`$XDG_DATA_HOME/sm2-emu/saves/states` (usually under `~/.local/share`) on Linux.
 
 ## Settings
 
@@ -420,7 +439,6 @@ xBR/ScaleFX 2D upscaling described under **Settings** above.
 
 - **Expand the settings GUI** with input binding, per-game overrides and volume
   control. (Wheel and gun buttons/axes already bind in the GUI.)
-- **Save states**, with multiple slots. Arcade games have no native save.
 
 ## Licence and credits
 

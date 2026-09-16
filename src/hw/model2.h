@@ -168,6 +168,9 @@ public:
     void load_nvram() override;
     void save_nvram() const override;
 
+    [[nodiscard]] bool save_state(const std::string& path) const override;
+    [[nodiscard]] bool load_state(const std::string& path) override;
+
     /// Copy the set's shipped EEPROM image over the chip, if it ships one.
     void seed_eeprom_from_rom();
 
@@ -367,6 +370,11 @@ private:
     void note_unmapped_read(u32 address, u32 width);
     void note_unmapped_write(u32 address, u32 value, u32 width);
 
+    /// Walk owned components, RAM and board scalars through the archive (same
+    /// shape as Model2C, coprocessor is the MB86233 TGP). See model2c.cpp for
+    /// the load contract.
+    void serialize(Archive& ar);
+
     // -- devices -----------------------------------------------------------
 
     cpu::i960::I960 m_cpu;
@@ -497,6 +505,9 @@ private:
     u64 m_cycles      = 0;  ///< master cycles since reset, at 25 MHz
     u64 m_frame_start = 0;
     u64 m_frames      = 0;
+
+    /// True only while run_frame() runs; save/load assert it is false. Transient.
+    bool m_in_frame = false;
 
     /// Delayed intena update, matching MAME's 80 ns timer.
     u32  m_pending_intena       = 0;
