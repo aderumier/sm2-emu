@@ -220,6 +220,7 @@ the operator controls stay reachable without a pad:
 | `Escape` | Return to the game picker (quits if launched with no picker) |
 | `P` | Pause |
 | `F6` / `F7` | Quick-save / quick-load the current game's state |
+| `F8` | Toggle the FPS counter |
 | `F9` | Quit |
 | `F10` | Toggle the settings menu |
 | `F11` | Toggle fullscreen (`Cmd+F` on macOS, where the OS reserves F11) |

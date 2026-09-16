@@ -270,7 +270,7 @@ void Gui::draw_menu_bar(Config& config)
         if (ImGui::BeginMenu("Settings")) {
             ImGui::MenuItem("Vsync", nullptr, &config.vsync);
             ImGui::MenuItem("Fullscreen", nullptr, &config.fullscreen);
-            ImGui::MenuItem("FPS counter", nullptr, &config.show_fps);
+            ImGui::MenuItem("FPS counter", "F8", &config.show_fps);
             ImGui::MenuItem("On-screen notifications", nullptr, &config.show_notifications);
             ImGui::MenuItem("Light-gun mode", nullptr, &config.lightgun);
             ImGui::EndMenu();
@@ -1336,7 +1336,7 @@ void Gui::draw_states_tab()
 }
 
 // ---------------------------------------------------------------------------
-// FPS overlay (top right, always on)
+// FPS overlay (top right)
 // ---------------------------------------------------------------------------
 
 void Gui::draw_fps_overlay(float measured_hz, const char* renderer_label)

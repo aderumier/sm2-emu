@@ -1836,8 +1836,8 @@ int main(int argc, char** argv)
         const char* fullscreen_key = "F11 fullscreen";
 #endif
         SM2_INFO("entering main loop; Esc back to games, F9 quits, P pauses, "
-                 "Tab fast-forwards, F6/F7 quick save/load, F10 menu, %s, "
-                 "F12 screenshot", fullscreen_key);
+                 "Tab fast-forwards, F6/F7 quick save/load, F8 FPS, F10 menu, "
+                 "%s, F12 screenshot", fullscreen_key);
 
         /// Everything the sound board produced, when --dump-audio was given.
         std::vector<s16> recorded_audio;
@@ -2006,6 +2006,8 @@ int main(int argc, char** argv)
                             } else if (event.key.key == SDLK_F7 && !event.key.repeat
                                        && machine_iface != nullptr) {
                                 state_action = StateAction{StateOp::Load, hw::kQuickSlot};
+                            } else if (event.key.key == SDLK_F8 && !event.key.repeat) {
+                                options.config.show_fps = !options.config.show_fps;
                             } else if (event.key.key == SDLK_TAB && !event.key.repeat) {
                                 fast_forward = true;
                             }
