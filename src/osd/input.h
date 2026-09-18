@@ -16,12 +16,14 @@
 
 #include "core/config.h"
 #include "core/types.h"
+#include "osd/drive_command.h"
 #include "rom/game.h"
 
 #include <SDL3/SDL.h>
 
 #include <array>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -32,6 +34,7 @@ struct Inputs;
 namespace sm2::osd {
 
 class EvdevGuns;
+class WheelForce;
 
 /// The cabinet's controls, driven by gamepads and the keyboard.
 ///
@@ -174,13 +177,17 @@ public:
     /// up from its baseline (a pedal that reads low when pressed reports false).
     [[nodiscard]] s32 captured_axis(const s16* baseline, int count, bool* positive) const;
 
-    /// Update the wheel's centring force from the current steering position.
-    /// Call once per frame after poll(). Does nothing without a wheel, without
-    /// force feedback, or for a title that is not a driving game (`drive_board`).
-    void update_force_feedback(const rom::GameSpec& game, u8 drive_force);
+    /// Decode the drive-board bytes written during the last frame. The last
+    /// force command stays in effect until the game sends another.
+    void update_drive_board(const rom::GameSpec& game, std::span<const u8> writes);
 
-    /// Drive gamepad rumble from the drive-board byte; call once per frame.
-    void update_pad_rumble(const rom::GameSpec& game, u8 drive_force);
+    /// Update the wheel's force from the drive board and the steering position.
+    /// Call once per frame after update_drive_board(). Does nothing without a
+    /// wheel, without force feedback, or for a title with no steering.
+    void update_force_feedback(const rom::GameSpec& game);
+
+    /// Drive gamepad rumble from the drive board; call once per frame.
+    void update_pad_rumble(const rom::GameSpec& game);
 
     /// Names of the gamepads currently open, in player order. An empty string means
     /// that player has no pad.
@@ -279,18 +286,12 @@ private:
     struct Wheel {
         SDL_Joystick*  handle  = nullptr;
         SDL_JoystickID id      = 0;
-        SDL_Haptic*    haptic  = nullptr;
-        /// A constant-force effect the driver honours (FF_CONSTANT) where it
-        /// ignores FF_SPRING. The level is set each frame from the game's own
-        /// drive-board command byte, decoded in update_force_feedback.
-        int            force_effect = -1;  ///< SDL effect id, or -1 if none.
+        /// Force feedback, or null if the wheel has none. The constant force is
+        /// set each frame from the game's drive-board command (drivers ignore
+        /// FF_SPRING); the sine effect, where supported, carries the rumble.
+        std::unique_ptr<WheelForce> ffb;
         int            force_level  = 0;   ///< Last level commanded, to skip no-ops.
-
-        /// A periodic (sine) effect run alongside the constant force to produce a
-        /// real vibration the wheel hardware oscillates -- the road/impact rumble,
-        /// which a once-per-frame constant force cannot convey. -1 if unsupported.
-        int            rumble_effect = -1;
-        int            rumble_mag    = -1;  ///< last rumble magnitude, to skip no-ops.
+        int            rumble_mag   = -1;  ///< last rumble magnitude, to skip no-ops.
 
         bool           autocenter = false;  ///< device autocentre still holding it.
         bool           can_rumble = false;  ///< has rumble motors of its own.
@@ -307,6 +308,7 @@ private:
         /// not whip to the stop the way the cabinet's heavy wheel never could.
         int            constant_hold  = 0;
         int            constant_dir   = 0;  ///< sign of the held constant force.
+        int            last_deflection = 0; ///< steering position last frame, for friction.
 
         /// Axis numbers on the device. Steering is the self-centring one;
         /// the pedals rest at one end. -1 means the device lacks it.
@@ -397,6 +399,9 @@ private:
     static constexpr usize kMaxGuns = 8;
     bool                             m_recoil_enabled  = true;
     u32                              m_recoil_strength = 60;
+
+    /// The drive board's current force command.
+    DriveCommand                     m_drive_command;
 
     /// The burst currently playing, shared by every pad: one drive board, one car.
     int                              m_pad_rumble_level    = 0;

@@ -313,11 +313,23 @@ public:
     [[nodiscard]] virtual u32 intreq() const = 0;
     [[nodiscard]] virtual u32 intena() const = 0;
 
-    /// The last command byte the game wrote to its force-feedback drive board,
-    /// or 0 for a machine without one. On Daytona this is a live stream during a
-    /// race; the OSD layer decodes it into a wheel force. High nibble is the
-    /// command, low nibble the level.
-    [[nodiscard]] virtual u8 drive_board_force() const { return 0; }
+    /// Bytes the game wrote to its force-feedback drive board, oldest first.
+    struct DriveBoardWrites {
+        std::array<u8, 16> bytes{};
+        usize              count = 0;
+
+        [[nodiscard]] std::span<const u8> view() const { return {bytes.data(), count}; }
+    };
+
+    /// The drive-board writes since the last call, which empties the list. A
+    /// frame can hold several (Indy 500 sends an effect then two parameters), so
+    /// sampling only the last byte would miss the effect.
+    [[nodiscard]] DriveBoardWrites take_drive_board_writes()
+    {
+        const DriveBoardWrites writes = m_drive_board_writes;
+        m_drive_board_writes.count    = 0;
+        return writes;
+    }
 
     /// Log every access that lands outside a mapped region. Off by default.
     virtual void set_log_unmapped(bool enable) = 0;
@@ -336,6 +348,20 @@ protected:
         u64  sound_ns = 0;
     };
     CoreProfile m_core_profile;
+
+    /// Called by each board's drive_board_write. When full, the newest byte
+    /// replaces the last slot.
+    void record_drive_board_write(u8 value)
+    {
+        auto& writes = m_drive_board_writes;
+        if (writes.count < writes.bytes.size()) {
+            writes.bytes[writes.count++] = value;
+        } else {
+            writes.bytes.back() = value;
+        }
+    }
+
+    DriveBoardWrites m_drive_board_writes;
 
     /// Zero the per-frame accumulators. Called at the top of run_frame().
     void reset_core_profile()

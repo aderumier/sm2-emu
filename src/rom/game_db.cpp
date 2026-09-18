@@ -137,6 +137,14 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool parse_drive_protocol(std::string_view text, DriveProtocol* out)
+{
+    if (text == "daytona") { *out = DriveProtocol::Daytona; return true; }
+    if (text == "stcc")    { *out = DriveProtocol::Stcc;    return true; }
+    if (text == "rally")   { *out = DriveProtocol::Rally;   return true; }
+    return false;
+}
+
 /// Names match MAME's ioport tags for these controls, lowercased, so a reader
 /// can grep either source for the same word.
 [[nodiscard]] bool parse_analog_control(std::string_view text, AnalogControl* out)
@@ -342,6 +350,14 @@ bool GameDatabase::load(const std::string& path)
             && !parse_protection(protection_attribute.value(), &game.protection)) {
             SM2_ERROR("%s: unrecognised protection '%s'", context.c_str(),
                       protection_attribute.value());
+            return false;
+        }
+
+        const pugi::xml_attribute drive_protocol_attribute = game_node.attribute("drive_protocol");
+        if (drive_protocol_attribute
+            && !parse_drive_protocol(drive_protocol_attribute.value(), &game.drive_protocol)) {
+            SM2_ERROR("%s: unrecognised drive_protocol '%s'", context.c_str(),
+                      drive_protocol_attribute.value());
             return false;
         }
 
@@ -732,6 +748,9 @@ bool GameDatabase::merge_clones(const std::set<std::string>& board_inherited)
         if (game.start_gear == 1)      { game.start_gear = parent.start_gear; }
         if (!game.shift_buttons)       { game.shift_buttons = parent.shift_buttons; }
         if (!game.drive_board)         { game.drive_board = parent.drive_board; }
+        if (game.drive_protocol == DriveProtocol::Daytona) {
+            game.drive_protocol = parent.drive_protocol;
+        }
         if (!game.motion_base)         { game.motion_base = parent.motion_base; }
         if (game.device_sets.empty())  { game.device_sets = parent.device_sets; }
         // A clone cannot be more validated than its parent unless it has been

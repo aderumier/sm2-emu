@@ -1891,6 +1891,7 @@ int main(int argc, char** argv)
         bool audio_paused_state = false; ///< tracks effective pause to drive audio/pacer on change.
         bool fast_forward       = false;
         bool running            = true;
+        bool quit_key_pressed   = false;  ///< F9 went down during this run.
         bool screenshot_requested = false;  ///< Set by F12, serviced next frame.
         bool return_to_picker_requested = false;  ///< Set by Esc; unload + picker.
 
@@ -1981,7 +1982,7 @@ int main(int argc, char** argv)
                                 running = false;
                             }
                         } else if (event.key.key == SDLK_F9 && !event.key.repeat) {
-                            running = false;
+                            quit_key_pressed = true;
                         } else if (event.key.key == SDLK_F10 && !event.key.repeat) {
                             gui.toggle();
                         } else if ((event.key.key == SDLK_F11
@@ -2016,6 +2017,8 @@ int main(int argc, char** argv)
                     case SDL_EVENT_KEY_UP:
                         if (event.key.key == SDLK_TAB) {
                             fast_forward = false;
+                        } else if (event.key.key == SDLK_F9 && quit_key_pressed) {
+                            running = false;
                         }
                         break;
                     default:
@@ -2086,9 +2089,10 @@ int main(int argc, char** argv)
                                      options.config.pad_rumble_strength);
                 input.set_present_placement(options.config.aspect_mode,
                                             options.config.scaling_method);
-                const u8 drive_force = machine_iface->drive_board_force();
-                input.update_force_feedback(loaded->game, drive_force);
-                input.update_pad_rumble(loaded->game, drive_force);
+                input.update_drive_board(loaded->game,
+                                         machine_iface->take_drive_board_writes().view());
+                input.update_force_feedback(loaded->game);
+                input.update_pad_rumble(loaded->game);
                 if (options.coin_at != 0) {
                     // Scripted coin, start and character confirmation, so an
                     // unattended capture can reach the game itself rather than

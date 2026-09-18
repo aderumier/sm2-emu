@@ -145,6 +145,13 @@ struct LightgunSpec {
 /// combination rather than a child element, since so far every title needing
 /// one needs exactly one fixed configuration of it apart from the 315-5881's
 /// per-title key, which rides along in `GameSpec::protection_key`.
+/// Which command set a title's force-feedback drive board speaks.
+enum class DriveProtocol : u8 {
+    Daytona,  ///< Effect in the high nibble, strength in the low one.
+    Stcc,     ///< Daytona's bytes, but pushes are a streamed torque.
+    Rally,    ///< Sega Rally's own board program.
+};
+
 enum class Protection {
     None,
     Sega315_5838_Doa,  ///< 315-5838/317-0229 compression chip, DOA hack mode.
@@ -310,6 +317,9 @@ struct GameSpec {
     /// True when the title latches bytes to a force-feedback drive board on the
     /// I/O controller's port E.
     bool drive_board = false;
+
+    /// How to read the bytes latched to the drive board.
+    DriveProtocol drive_protocol = DriveProtocol::Daytona;
 
     /// True when the positional-gun cabinet has a separate Missile button
     /// (Behind Enemy Lines: P1 on IN1 bit 0x10, P2 on 0x20) rather than an

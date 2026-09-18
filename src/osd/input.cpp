@@ -16,6 +16,8 @@
 
 #include "core/log.h"
 #include "hw/model2.h"
+#include "osd/drive_command.h"
+#include "osd/wheel_ffb.h"
 
 #ifdef SM2_HAVE_EVDEV
 #include "osd/evdev_gun.h"
@@ -538,63 +540,18 @@ void Input::add_wheel(SDL_JoystickID id)
     // Force feedback is a constant force we aim ourselves each frame (see
     // update_force_feedback): the wheel's driver ignores FF_SPRING but honours
     // FF_CONSTANT, so the centring pull is computed from the wheel angle rather
-    // than programmed as a spring. Uploaded once at zero level and left running.
+    // than programmed as a spring. Started at zero level and left running.
     if (m_wheel_settings.ffb) {
-        SDL_Haptic* haptic = SDL_OpenHapticFromJoystick(handle);
-        if (haptic == nullptr) {
-            SM2_INFO("wheel has no haptic effects (%s); using plain rumble",
-                     SDL_GetError());
-        } else if ((SDL_GetHapticFeatures(haptic) & SDL_HAPTIC_CONSTANT) == 0) {
-            SM2_INFO("wheel force feedback lacks a constant-force effect; leaving it limp");
-            SDL_CloseHaptic(haptic);
-        } else {
-            m_wheel.haptic = haptic;
-            SDL_SetHapticGain(haptic, 100);
+        auto ffb = std::make_unique<WheelForce>();
+        if (ffb->open(handle)) {
+            SM2_INFO("wheel force feedback: %s%s", ffb->backend(),
+                     ffb->has_rumble() ? " (with rumble)" : "");
             // Centres the wheel until our spring has a position to work from.
-            SDL_SetHapticAutocenter(haptic, 50);
+            ffb->set_autocenter(50);
             m_wheel.autocenter = true;
-
-            SDL_HapticEffect effect{};
-            effect.type                 = SDL_HAPTIC_CONSTANT;
-            effect.constant.type        = SDL_HAPTIC_CONSTANT;
-            effect.constant.length      = SDL_HAPTIC_INFINITY;
-            // Cartesian direction with dir[0]=0: the sign of the level alone
-            // chooses which way the force pulls. This is the encoding Logitech's
-            // evdev FF honours; a steering-axis direction pulled hard one way.
-            effect.constant.direction.type  = SDL_HAPTIC_CARTESIAN;
-            effect.constant.direction.dir[0] = 0;
-            effect.constant.level            = 0;
-            m_wheel.force_effect = SDL_CreateHapticEffect(haptic, &effect);
-            if (m_wheel.force_effect < 0) {
-                SM2_INFO("could not create the force effect: %s", SDL_GetError());
-            } else {
-                SDL_RunHapticEffect(haptic, m_wheel.force_effect, SDL_HAPTIC_INFINITY);
-            }
-
-            // A periodic sine effect for the actual vibration/rumble, run
-            // alongside the constant force. The wheel hardware oscillates it at a
-            // real vibration frequency, so an impact or the game's road-buzz is
-            // *felt* as a buzz through the rim rather than as a steady push a
-            // once-per-frame constant force would produce. Magnitude is set per
-            // frame in update_force_feedback; starts at zero.
-            if ((SDL_GetHapticFeatures(haptic) & SDL_HAPTIC_SINE) != 0) {
-                SDL_HapticEffect rumble{};
-                rumble.type              = SDL_HAPTIC_SINE;
-                rumble.periodic.type     = SDL_HAPTIC_SINE;
-                rumble.periodic.direction.type   = SDL_HAPTIC_CARTESIAN;
-                rumble.periodic.direction.dir[0] = 1;
-                rumble.periodic.period   = 20;   // ms -> ~50 Hz, a punchy road buzz
-                rumble.periodic.magnitude = 0;
-                rumble.periodic.length   = SDL_HAPTIC_INFINITY;
-                m_wheel.rumble_effect = SDL_CreateHapticEffect(haptic, &rumble);
-                if (m_wheel.rumble_effect >= 0) {
-                    SDL_RunHapticEffect(haptic, m_wheel.rumble_effect, SDL_HAPTIC_INFINITY);
-                }
-            }
-            SM2_DEBUG("wheel FFB: %d simultaneous effect(s), constant/sine %d/%d",
-                      SDL_GetMaxHapticEffectsPlaying(haptic),
-                      (SDL_GetHapticFeatures(haptic) & SDL_HAPTIC_CONSTANT) ? 1 : 0,
-                      (SDL_GetHapticFeatures(haptic) & SDL_HAPTIC_SINE) ? 1 : 0);
+            m_wheel.ffb        = std::move(ffb);
+        } else {
+            SM2_INFO("wheel has no constant-force effect; using plain rumble");
         }
     }
 }
@@ -604,17 +561,8 @@ void Input::remove_wheel(SDL_JoystickID id)
     if (m_wheel.handle == nullptr || m_wheel.id != id) {
         return;
     }
-    if (m_wheel.haptic != nullptr) {
-        // Remove all effects on close
-        for (const int effect : {m_wheel.rumble_effect, m_wheel.force_effect}) {
-            if (effect >= 0) {
-                SDL_StopHapticEffect(m_wheel.haptic, effect);
-                SDL_DestroyHapticEffect(m_wheel.haptic, effect);
-            }
-        }
-        SDL_StopHapticEffects(m_wheel.haptic);
-        SDL_SetHapticAutocenter(m_wheel.haptic, 50);  // hand it back self-centring
-        SDL_CloseHaptic(m_wheel.haptic);
+    if (m_wheel.ffb) {
+        m_wheel.ffb->close();
     }
     SDL_RumbleJoystick(m_wheel.handle, 0, 0, 0);
     SDL_CloseJoystick(m_wheel.handle);
@@ -869,112 +817,120 @@ s32 Input::captured_axis(const s16* baseline, int count, bool* positive) const
     return best_axis;
 }
 
-void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
+void Input::update_drive_board(const rom::GameSpec& game, std::span<const u8> writes)
+{
+    for (const u8 value : writes) {
+        const DriveCommand command = decode_drive_command(game.drive_protocol, value);
+        if (command.effect == DriveCommand::Effect::Other) {
+            continue;
+        }
+        // A one-off spring does not interrupt a streamed command.
+        if (command.effect == DriveCommand::Effect::Spring && !command.held
+            && m_drive_command.held) {
+            continue;
+        }
+        m_drive_command = command;
+    }
+}
+
+void Input::update_force_feedback(const rom::GameSpec& game)
 {
     if (m_wheel.handle == nullptr) {
         return;
     }
 
-    // Real force feedback, decoded from the command byte the game streams to its
-    // drive board. Daytona's board (like the Model 2/3 family) encodes an effect
-    // in the high nibble and a strength 0..15 in the low nibble. Learnt against
-    // the wheel position while driving:
-    //   0x5x  constant force to the RIGHT   (seen only with the wheel turned right)
-    //   0x6x  constant force to the LEFT    (seen only with the wheel turned left)
-    //   0x3x  centring spring, strength = level (board recentres from position)
-    //   0x2x  a weaker force/friction, treated like a light centring
-    //   0x1x  no effect;  0x0x / 0x7x  boot/handshake
+    // The game's own force, from its drive board.
+    const DriveCommand& command = m_drive_command;
     int level  = 0;
-    int rumble = 0;   // periodic-effect magnitude, felt as a buzz not a push
+    int rumble = 0;   // sine magnitude, felt as vibration rather than a push
     if (game.has_steering() && m_wheel_settings.ffb && m_wheel.steer_axis >= 0) {
         const int ceiling = static_cast<int>(
             std::clamp(m_wheel_settings.strength, 0u, 100u) * 32767 / 100);
-        const int cmd   = drive_force & 0xf0;
-        const int steps = drive_force & 0x0f;          // 0..15
-        const int mag   = steps * ceiling / 15;
+        const int mag = command.strength * ceiling / kDriveFull;
 
         // An axis that has not reported yet says nothing about where the wheel is.
         const bool steer_known =
             m_wheel.steer_axis >= Wheel::kMaxAxes
             || (m_wheel.axes_moved & (1u << m_wheel.steer_axis)) != 0;
-        if (steer_known && m_wheel.autocenter && m_wheel.haptic != nullptr) {
-            SDL_SetHapticAutocenter(m_wheel.haptic, 0);
+        if (steer_known && m_wheel.autocenter && m_wheel.ffb) {
+            m_wheel.ffb->set_autocenter(0);
             m_wheel.autocenter = false;
         }
         const int deflection =
             steer_known ? static_cast<int>(wheel_axis(m_wheel.steer_axis)) : 0;
+        const int velocity = deflection - m_wheel.last_deflection;
+        m_wheel.last_deflection = deflection;
 
-        // A baseline centring spring is always present on a drive-board game, so
-        // the wheel self-centres from the moment the emulator launches -- through
-        // the attract screens and menus, not only once the game streams its own
-        // centring command. Firm from a small deadzone, capped short of full lock.
-        int baseline = 0;
-        {
+        // A spring of the given strength: zero in a small deadzone, rising to full
+        // strength part way to lock. Signed like the deflection.
+        const auto spring = [deflection](int full) {
             constexpr int kDeadzone = 1500;
-            const int m = std::abs(deflection);
-            if (m > kDeadzone) {
-                const int span = std::min(m - kDeadzone, 14000);
-                baseline = (ceiling * 3 / 4) * span / 14000;
-                baseline = deflection < 0 ? -baseline : baseline;
+            constexpr int kSpan     = 14000;
+            const int     m         = std::abs(deflection);
+            if (m <= kDeadzone) {
+                return 0;
             }
-        }
+            const int force = full * std::min(m - kDeadzone, kSpan) / kSpan;
+            return deflection < 0 ? -force : force;
+        };
 
-        switch (cmd) {
-            case 0x50:  // constant force right -> push wheel right (negative)
-            case 0x60:  // constant force left  -> push wheel left  (positive)
-            {
-                const int dir = (cmd == 0x50) ? -1 : 1;
-                // A directional command is a scrub/impact the drive board felt as
-                // a jolt through the rim, so feed its strength to the periodic
-                // effect (a vibration, not only a push); a direction flip is the
-                // sharpest. A sustained one-direction push is held full for a
-                // brief kick then decayed hard, since a free PC wheel would spin
-                // to the stop where the cabinet's heavy geared wheel barely moved.
-                rumble = mag;
-                if (dir == m_wheel.constant_dir) {
-                    m_wheel.constant_hold++;
-                } else {
-                    rumble = mag * 3 / 2;   // a flip is a sharper jolt
-                    m_wheel.constant_hold = 0;
-                    m_wheel.constant_dir  = dir;
-                }
-                constexpr int kFullFrames = 8;   // ~0.14 s of full kick
-                int scaled = mag;
-                if (m_wheel.constant_hold > kFullFrames) {
-                    const int over = std::min(m_wheel.constant_hold - kFullFrames, 18);
-                    scaled = mag - (mag * 9 / 10) * over / 18;
-                }
-                // The directional force adds to the baseline centring, and the
-                // faster the game toggles it the more it decays into rumble.
-                level = baseline + dir * scaled;
-                break;
-            }
-            case 0x20:  // lighter centring
-            case 0x30:  // main centring spring
-            default: {
+        // So the wheel centres in menus and attract mode too, not only once the
+        // game sends its own centring. Left out while the game streams its own
+        // spring, as it then centres the wheel itself.
+        const bool game_centres =
+            command.held && command.effect == DriveCommand::Effect::Spring;
+        const int  baseline     = game_centres ? 0 : spring(ceiling * 3 / 4);
+
+        // Positive levels push the wheel left (the output is negated).
+        int game_force = 0;
+        if (command.is_push() && command.held) {
+            // A streamed torque is the game's own steering feel, centring
+            // included; apply it as sent.
+            m_wheel.constant_hold = 0;
+            m_wheel.constant_dir  = 0;
+            game_force = command.effect == DriveCommand::Effect::PushLeft ? mag : -mag;
+        } else if (command.is_push()) {
+            const int dir = command.effect == DriveCommand::Effect::PushLeft ? 1 : -1;
+            // A push is a jolt from the road, so it also drives the vibration; a
+            // change of direction is the sharpest. A sustained push is held for a
+            // brief kick then decayed, as a free PC wheel would otherwise spin to
+            // the stop where the cabinet's heavy geared wheel barely moved.
+            rumble = mag;
+            if (dir == m_wheel.constant_dir) {
+                m_wheel.constant_hold++;
+            } else {
+                rumble = mag * 3 / 2;
                 m_wheel.constant_hold = 0;
-                m_wheel.constant_dir  = 0;
-                // The game's own centring command deepens the baseline spring by
-                // its commanded strength; no-effect/boot codes leave the baseline.
-                int deepen = 0;
-                if (cmd == 0x20 || cmd == 0x30) {
-                    constexpr int kDeadzone = 1500;
-                    const int m = std::abs(deflection);
-                    if (m > kDeadzone) {
-                        const int span = std::min(m - kDeadzone, 14000);
-                        deepen = mag * span / 14000;
-                        deepen = deflection < 0 ? -deepen : deepen;
-                    }
+                m_wheel.constant_dir  = dir;
+            }
+            constexpr int kFullFrames = 8;   // ~0.14 s of full kick
+            int scaled = mag;
+            if (m_wheel.constant_hold > kFullFrames) {
+                const int over = std::min(m_wheel.constant_hold - kFullFrames, 18);
+                scaled = mag - (mag * 9 / 10) * over / 18;
+            }
+            game_force = dir * scaled;
+        } else {
+            m_wheel.constant_hold = 0;
+            m_wheel.constant_dir  = 0;
+            switch (command.effect) {
+                case DriveCommand::Effect::Spring:
+                    game_force = spring(mag);
+                    break;
+                case DriveCommand::Effect::Friction: {
+                    // Opposes the turn, full strength from this speed (axis units per frame).
+                    constexpr int kFullSpeed = 1024;
+                    game_force = mag * std::clamp(velocity, -kFullSpeed, kFullSpeed) / kFullSpeed;
+                    break;
                 }
-                level = baseline + deepen;
-                break;
+                case DriveCommand::Effect::Vibrate:
+                    rumble = mag;
+                    break;
+                default:
+                    break;
             }
         }
-        // The game mostly commands low levels (2..7 of 15), so raw forces sit
-        // well under the ceiling. A gain lifts the mid range into something felt;
-        // the clamp still protects the top end.
-        level = level * 5 / 3;
-        level = std::clamp(level, -ceiling, ceiling);
+        level = std::clamp(baseline + game_force, -ceiling, ceiling);
     }
 
     // Boost the impact rumble so a hit is clearly felt.
@@ -1012,31 +968,16 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
         return (want == 0) != (sent == 0) || std::abs(want - sent) >= kFeltChange;
     };
 
-    if (m_wheel.force_effect >= 0 && worth_sending(level, m_wheel.force_level)) {
+    if (m_wheel.ffb && worth_sending(level, m_wheel.force_level)) {
         m_wheel.force_level = level;
-        SDL_HapticEffect effect{};
-        effect.type                      = SDL_HAPTIC_CONSTANT;
-        effect.constant.type             = SDL_HAPTIC_CONSTANT;
-        effect.constant.length           = SDL_HAPTIC_INFINITY;
-        effect.constant.direction.type   = SDL_HAPTIC_CARTESIAN;
-        effect.constant.direction.dir[0] = 0;
         // Negated so the force opposes the deflection and centres the wheel.
-        effect.constant.level            = static_cast<s16>(-level);
-        SDL_UpdateHapticEffect(m_wheel.haptic, m_wheel.force_effect, &effect);
+        m_wheel.ffb->set_force(static_cast<s16>(-level));
     }
 
-    if (m_wheel.rumble_effect >= 0) {
+    if (m_wheel.ffb && m_wheel.ffb->has_rumble()) {
         if (worth_sending(rumble_now, m_wheel.rumble_mag)) {
             m_wheel.rumble_mag = rumble_now;
-            SDL_HapticEffect rmb{};
-            rmb.type                     = SDL_HAPTIC_SINE;
-            rmb.periodic.type            = SDL_HAPTIC_SINE;
-            rmb.periodic.direction.type  = SDL_HAPTIC_CARTESIAN;
-            rmb.periodic.direction.dir[0] = 1;
-            rmb.periodic.period          = 20;   // ~50 Hz, a punchier buzz
-            rmb.periodic.magnitude       = static_cast<s16>(rumble_now);
-            rmb.periodic.length          = SDL_HAPTIC_INFINITY;
-            SDL_UpdateHapticEffect(m_wheel.haptic, m_wheel.rumble_effect, &rmb);
+            m_wheel.ffb->set_rumble(static_cast<s16>(rumble_now));
         }
     } else if (m_wheel.can_rumble) {
         // A wheel has no rumble motors; its driver swings the steering instead.
@@ -1053,18 +994,13 @@ void Input::update_force_feedback(const rom::GameSpec& game, u8 drive_force)
         m_wheel.rumble_mag = rumble_now;
     }
 
-    SM2_DEBUG("ffb: cmd=0x%02x steer=%d level=%d rumble=%d", drive_force,
+    SM2_DEBUG("ffb: effect=%d strength=%d steer=%d level=%d rumble=%d",
+              static_cast<int>(m_drive_command.effect), m_drive_command.strength,
               m_wheel.steer_axis >= 0 ? static_cast<int>(wheel_axis(m_wheel.steer_axis)) : 0,
               level, rumble_now);
 }
 
-namespace {
-/// Directional drive-board levels: 0 is a release, and the board never commands above 7.
-constexpr int kMinSteps  = 1;
-constexpr int kFullSteps = 7;
-}  // namespace
-
-void Input::update_pad_rumble(const rom::GameSpec& game, u8 drive_force)
+void Input::update_pad_rumble(const rom::GameSpec& game)
 {
     if (m_pads.empty()) {
         return;
@@ -1074,19 +1010,17 @@ void Input::update_pad_rumble(const rom::GameSpec& game, u8 drive_force)
         std::clamp(m_pad_rumble_strength, 0u, 100u) * 65535 / 100);
     const bool active = m_pad_rumble_enabled && game.has_steering();
 
-    // Jolts: the drive board's directional codes, which are short bursts, not a held force.
+    // Jolts: the drive board's pushes and vibration, which are short bursts, not a held force.
+    const DriveCommand& command = m_drive_command;
     int impact = 0;
-    if (active) {
-        const int cmd   = drive_force & 0xf0;
-        const int steps = drive_force & 0x0f;
-        if ((cmd == 0x50 || cmd == 0x60) && steps >= kMinSteps) {
-            // Start at a floor; a pad motor cannot render the smallest levels.
-            const int min_felt = ceiling / 4;
-            const int reach    = std::min(steps, kFullSteps) - kMinSteps;
-            impact = min_felt
-                   + (ceiling - min_felt) * reach / (kFullSteps - kMinSteps);
+    if (active && command.strength > 0 && !command.held
+        && (command.is_push() || command.effect == DriveCommand::Effect::Vibrate)) {
+        // Start at a floor; a pad motor cannot render the smallest levels.
+        const int min_felt = ceiling / 4;
+        impact = min_felt + (ceiling - min_felt) * command.strength / kDriveFull;
 
-            const int dir = (cmd == 0x50) ? -1 : 1;
+        if (command.is_push()) {
+            const int dir = command.effect == DriveCommand::Effect::PushLeft ? 1 : -1;
             if (dir != m_pad_rumble_dir) {
                 impact = std::min(impact * 3 / 2, 65535);  // a flip is the sharper hit
                 m_pad_rumble_dir = dir;
@@ -1110,7 +1044,8 @@ void Input::update_pad_rumble(const rom::GameSpec& game, u8 drive_force)
     }
 
     const int target = std::max(impact, cornering);
-    SM2_DEBUG("pad rumble: cmd=0x%02x impact=%d cornering=%d", drive_force, impact, cornering);
+    SM2_DEBUG("pad rumble: effect=%d impact=%d cornering=%d",
+              static_cast<int>(command.effect), impact, cornering);
 
     // Hold the level for a burst rather than tracking frame by frame, so a pad does not drone.
     constexpr int kHoldFrames = 12;   // ~200 ms at 57.5 Hz
