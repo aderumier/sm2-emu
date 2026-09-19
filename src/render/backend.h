@@ -41,6 +41,8 @@ class Gui;
 
 namespace sm2::render {
 
+class TextureReplacements;
+
 /// What a backend can be asked to do, queried rather than assumed, so a call
 /// site asks "does this backend support X" instead of knowing which backend it
 /// is.
@@ -336,6 +338,11 @@ public:
     /// Adopt new enhancement options before the next frame. Shader/pass state,
     /// so this reallocates nothing and is safe to call between frames.
     virtual void set_enhancement_options(const EnhancementOptions& options) = 0;
+
+    /// Custom textures to draw in place of the game's own, or null for none.
+    /// The backend uploads them before its next frame and whenever their
+    /// generation() changes; the caller keeps them alive until replaced.
+    virtual void set_texture_replacements(TextureReplacements* replacements) = 0;
 
     /// Scale the finished native frame onto the window, letterboxed to the
     /// current aspect mode.

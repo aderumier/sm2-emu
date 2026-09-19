@@ -138,6 +138,11 @@ struct Config {
     u32           anisotropy     = 4;
     Upscale2D     upscale_2d     = Upscale2D::Faithful;
 
+    /// Replacement textures from <saves>/textures/<game>/load, and dumping
+    /// every texture the 3D draws to <saves>/textures/<game>/dump.
+    bool custom_textures = true;
+    bool dump_textures   = false;
+
     /// Exact device name to prefer, as `--list-gpus` prints it. Empty picks the
     /// best-scoring device.
     std::string gpu;

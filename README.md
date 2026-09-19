@@ -304,6 +304,26 @@ like the arcade:
 - **2D upscale** — xBR or ScaleFX edge-smooth the 2D layers (HUD, text, menus)
   so diagonals read as clean slopes rather than stairsteps.
 
+### Custom textures
+
+The 3D textures can be dumped and replaced with higher-resolution versions
+(Vulkan and OpenGL renderers):
+
+1. Turn on **Dump textures** in the Video tab (or `dump_textures = true`, or
+   `--dump-textures`) and play. When the game exits, every texture it drew is
+   written to `<saves>/textures/<game>/dump/`, upright and in colour, with an
+   `index.html` to browse them and see where each one appears.
+2. Improve any of them and save the result under the **same file name** in
+   `<saves>/textures/<game>/load/` (subfolders are fine), at any whole multiple
+   of the original size. Keep the image's orientation as dumped.
+3. With **Custom textures** on (the default), they replace the originals the
+   next time the game starts, or straight away with **Reload**. Other colour
+   variants of the same texture and the game's lighting are applied to the
+   replacement automatically.
+
+Raise the render scale to see the extra detail; at 1x there are too few pixels
+to show it.
+
 ## Networking (cabinet link)
 
 Several Model 2 titles support linking cabinets so multiple machines play

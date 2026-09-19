@@ -73,6 +73,7 @@ public:
     [[nodiscard]] bool save_capture(const std::string& path) const override;
     void set_present_options(const PresentOptions& options) override;
     void set_enhancement_options(const EnhancementOptions& options) override;
+    void set_texture_replacements(TextureReplacements* replacements) override;
     void blit_to_swapchain() override;
     void begin_overlay_frame() override;
     void draw_overlay(bool active) override;

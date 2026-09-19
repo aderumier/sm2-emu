@@ -21,6 +21,7 @@
 #include "hw/geometrizer.h"
 #include "hw/model2_machine_base.h"
 #include "hw/model2_video.h"
+#include "render/texture_replace.h"
 
 #include <algorithm>
 
@@ -109,11 +110,18 @@ PolyParams describe_polygon(const hw::RenderPolygon& poly, const hw::Model2Video
 
 TriangulatedFrame triangulate(const hw::Model2MachineBase* machine,
                               const hw::Model2Video&       video,
-                              bool*                        warned)
+                              bool*                        warned,
+                              TextureReplacements*         replacements)
 {
     TriangulatedFrame frame;
     if (machine == nullptr) {
         return frame;
+    }
+    if (replacements != nullptr && replacements->empty()) {
+        replacements = nullptr;
+    }
+    if (replacements != nullptr) {
+        replacements->begin_frame(*machine, video);
     }
 
     for (const hw::RenderPolygon& poly : machine->render_list().polygons) {
@@ -155,7 +163,10 @@ TriangulatedFrame triangulate(const hw::Model2MachineBase* machine,
         }
 
         const u32        index  = static_cast<u32>(frame.polygons.size());
-        const PolyParams params = describe_polygon(poly, video);
+        PolyParams params = describe_polygon(poly, video);
+        if (replacements != nullptr && (params.flags & kFlagTextured) != 0) {
+            replacements->resolve(*machine, video, poly, &params);
+        }
         frame.polygons.push_back(params);
 
         const bool can_early = (params.flags & (kFlagChecker | kFlagTranslucent)) == 0;

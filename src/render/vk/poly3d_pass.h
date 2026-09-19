@@ -29,6 +29,10 @@ class Model2MachineBase;
 class Model2Video;
 }  // namespace sm2::hw
 
+namespace sm2::render {
+class TextureReplacements;
+}
+
 namespace sm2::render::vk {
 
 /// Draws the emulated 3D output.
@@ -85,6 +89,14 @@ public:
     /// Anisotropic texture-filter quality (0 = faithful single-tap, else the
     /// tap ceiling). Pushed to the shader each draw; live, no reallocation.
     void set_texture_quality(u32 quality) { m_texture_quality = quality; }
+
+    /// Custom textures to draw in place of the hardware's, or null for none.
+    /// The atlas is uploaded by the next build() whenever this or its contents
+    /// change.
+    void set_texture_replacements(TextureReplacements* replacements)
+    {
+        m_replacements = replacements;
+    }
 
     /// Triangulate this frame's polygons, unpack their texture headers, and refresh
     /// whatever machine memory has changed since this frame last ran.
@@ -204,6 +216,14 @@ private:
                                                VkPipeline* out_pipeline);
     [[nodiscard]] bool create_decode_pipeline();
 
+    /// Create the custom-texture atlas, `layers` square layers of `size` with
+    /// `mips` levels. A 1x1 placeholder stands in while there is nothing loaded.
+    [[nodiscard]] bool create_atlas(u32 size, u32 layers, u32 mips);
+    void destroy_atlas();
+
+    /// Bring the atlas in line with m_replacements, recording its upload.
+    void sync_replacements();
+
     /// Copy whatever this frame's copies are missing, and record the transfer of
     /// the tone curve into its image.
     void refresh_machine_data(const hw::Model2MachineBase& machine, const hw::Model2Video& video);
@@ -258,6 +278,23 @@ private:
     u32 m_render_scale = 1;
 
     u32 m_texture_quality = 0;  ///< 0 = faithful single-tap, else tap ceiling
+
+    // -- custom textures ---------------------------------------------------
+
+    TextureReplacements* m_replacements = nullptr;
+    /// Generation of the replacements last synced, 0 for none; live is false
+    /// while the 1x1 placeholder stands in.
+    u64           m_atlas_generation = 0;
+    bool          m_atlas_live       = false;
+    bool          m_atlas_ready      = false;
+    VkImage       m_atlas            = VK_NULL_HANDLE;
+    VmaAllocation m_atlas_alloc      = nullptr;
+    VkImageView   m_atlas_view       = VK_NULL_HANDLE;
+    u32           m_atlas_size       = 1;
+    u32           m_atlas_layers     = 1;
+    u32           m_atlas_mips       = 1;
+    VkSampler     m_atlas_sampler    = VK_NULL_HANDLE;
+    HostBuffer    m_atlas_staging;
 };
 
 }  // namespace sm2::render::vk

@@ -17,6 +17,7 @@
 #include "core/log.h"
 #include "hw/model2_machine_base.h"
 #include "hw/model2_video.h"
+#include "render/texture_replace.h"
 
 #include "shaders/polygon_frag_early_glsl.h"
 #include "shaders/polygon_frag_glsl.h"
@@ -55,6 +56,10 @@ void Poly3DPass::shutdown()
     if (m_decoded_texture != 0) {
         DeleteTextures(1, &m_decoded_texture);
         m_decoded_texture = 0;
+    }
+    if (m_atlas_texture != 0) {
+        DeleteTextures(1, &m_atlas_texture);
+        m_atlas_texture = 0;
     }
     if (m_tone_texture != 0) {
         DeleteTextures(1, &m_tone_texture);
@@ -152,6 +157,11 @@ bool Poly3DPass::create_buffers()
     m_tone_texture = create_tone_texture(hw::Model2Video::kToneShades,
                                         hw::Model2Video::kToneComponents);
 
+    // 1x1 placeholder until custom textures are loaded; never sampled.
+    GenTextures(1, &m_atlas_texture);
+    BindTexture(GL_TEXTURE_2D_ARRAY, m_atlas_texture);
+    TexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 1, 1, 1);
+
     return m_vertex_buffer.handle != 0 && m_polygon_buffer.handle != 0
         && m_sheets_buffer.handle != 0 && m_luma_buffer.handle != 0
         && m_decoded_texture != 0 && m_tone_texture != 0;
@@ -209,13 +219,56 @@ void Poly3DPass::decode_textures()
     MemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 }
 
+void Poly3DPass::sync_replacements()
+{
+    const bool wanted = m_replacements != nullptr && !m_replacements->empty()
+                     && m_replacements->layer_count() != 0;
+    const u64 generation = wanted ? m_replacements->generation() : 0;
+    if (generation == m_atlas_generation) {
+        return;
+    }
+    m_atlas_generation = generation;
+
+    bool have_pixels = generation != 0;
+    for (u32 layer = 0; have_pixels && layer < m_replacements->layer_count(); ++layer) {
+        have_pixels = !m_replacements->layer_pixels(layer).empty();
+    }
+
+    DeleteTextures(1, &m_atlas_texture);
+    GenTextures(1, &m_atlas_texture);
+    BindTexture(GL_TEXTURE_2D_ARRAY, m_atlas_texture);
+    m_atlas_live = have_pixels;
+    if (!have_pixels) {
+        TexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 1, 1, 1);
+        return;
+    }
+
+    const auto size   = static_cast<GLsizei>(kReplacementLayerSize);
+    const u32  layers = m_replacements->layer_count();
+    TexStorage3D(GL_TEXTURE_2D_ARRAY, static_cast<GLsizei>(TextureReplacements::mip_levels()),
+                 GL_RGBA8, size, size, static_cast<GLsizei>(layers));
+    for (u32 layer = 0; layer < layers; ++layer) {
+        TexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, static_cast<GLint>(layer), size, size, 1,
+                      GL_RGBA, GL_UNSIGNED_BYTE, m_replacements->layer_pixels(layer).data());
+    }
+    GenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    m_replacements->release_pixels();
+}
+
 void Poly3DPass::build(const hw::Model2MachineBase* machine, const hw::Model2Video& video)
 {
     if (machine != nullptr) {
         refresh_machine_data(*machine, video);
     }
 
-    m_frame_geometry = render::triangulate(machine, video, &m_capacity_warned);
+    sync_replacements();
+
+    m_frame_geometry = render::triangulate(machine, video, &m_capacity_warned,
+                                           m_atlas_live ? m_replacements : nullptr);
 
     m_vertex_count = static_cast<u32>(m_frame_geometry.vertices.size());
     if (m_vertex_count != 0) {
@@ -278,6 +331,8 @@ void Poly3DPass::draw_polygons()
     // right texture to the matching unit.
     ActiveTexture(GL_TEXTURE0);
     BindTexture(GL_TEXTURE_2D_ARRAY, m_decoded_texture);
+    ActiveTexture(GL_TEXTURE4);
+    BindTexture(GL_TEXTURE_2D_ARRAY, m_atlas_texture);
     ActiveTexture(GL_TEXTURE2);
     BindTexture(GL_TEXTURE_2D, m_tone_texture);
     BindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_luma_buffer.handle);

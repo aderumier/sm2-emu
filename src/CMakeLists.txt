@@ -36,6 +36,9 @@ target_link_libraries(sm2_core PRIVATE sm2_warnings)
 add_library(sm2_render STATIC
     render/geometry.cpp
     render/image_write.cpp
+    render/texture_dump.cpp
+    render/texture_key.cpp
+    render/texture_replace.cpp
 )
 target_link_libraries(sm2_render
     PUBLIC
@@ -44,6 +47,7 @@ target_link_libraries(sm2_render
         sm2_warnings
         sm2_hw
         sm2_miniz
+        sm2_stb
 )
 
 # ---------------------------------------------------------------------------

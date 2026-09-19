@@ -24,14 +24,20 @@ namespace sm2::render {
 
 bool write_png_rgb(const std::string& path, u32 width, u32 height, const u8* rgb)
 {
-    if (rgb == nullptr || width == 0 || height == 0) {
+    return write_png(path, width, height, 3, rgb);
+}
+
+bool write_png(const std::string& path, u32 width, u32 height, u32 channels, const u8* pixels)
+{
+    if (pixels == nullptr || width == 0 || height == 0) {
         SM2_ERROR("png write: nothing to write");
         return false;
     }
 
     std::size_t png_size = 0;
     void*       png      = tdefl_write_image_to_png_file_in_memory(
-        rgb, static_cast<int>(width), static_cast<int>(height), 3, &png_size);
+        pixels, static_cast<int>(width), static_cast<int>(height), static_cast<int>(channels),
+        &png_size);
     if (png == nullptr) {
         SM2_ERROR("png write: encode failed");
         return false;

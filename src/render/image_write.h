@@ -25,4 +25,8 @@ namespace sm2::render {
 [[nodiscard]] bool write_png_rgb(const std::string& path, u32 width, u32 height,
                                  const u8* rgb);
 
+/// The same for 1..4 interleaved 8-bit channels.
+[[nodiscard]] bool write_png(const std::string& path, u32 width, u32 height, u32 channels,
+                             const u8* pixels);
+
 }  // namespace sm2::render

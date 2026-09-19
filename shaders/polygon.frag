@@ -84,6 +84,10 @@ struct PolyParams {
     uint microX;       ///< position of the microtexture, always 128 by 128
     uint microY;
     uint microMinLod;
+    uint replace;      ///< custom texture: atlas layer + 1 (0 = none), max LOD << 8
+    uint replaceXY;    ///< its rectangle in the atlas layer, 16 bits each
+    uint replaceWH;
+    uint tint;         ///< 10 bits per channel, 1/512 units
 };
 
 /// Both texture sheets, decoded ahead of time by texel_decode.comp from the
@@ -105,6 +109,11 @@ layout(std430, set = 0, binding = 1) readonly buffer Luma { uint uLuma[]; };
 layout(set = 0, binding = 2) uniform sampler2D uTone;
 
 layout(std430, set = 0, binding = 3) readonly buffer Polys { PolyParams uPolygon[]; };
+
+/// Custom textures, packed into square layers with a wrapped gutter round each
+/// (render/texture_replace.cpp). Filtered and mipmapped like any modern texture.
+layout(set = 0, binding = 4) uniform sampler2DArray uReplace;
+const float kReplaceLayerSize = 4096.0;
 
 const uint kFlagTextured  = 1u << 0;
 const uint kFlagChecker   = 1u << 1;
@@ -357,9 +366,54 @@ ivec2 sampleMipChain(PolyParams p, int u, int v, int mml, int level, int maxLeve
     return texel;
 }
 
+/// A custom texture in place of the hardware's texel path. Only the colour
+/// source changes: coordinates, wrapping and mirroring are the polygon's own,
+/// and the tint carries the polygon's colouring and lighting relative to the
+/// colouring the image was painted over.
+vec3 sampleReplacement(PolyParams p, vec2 texelDx, vec2 texelDy)
+{
+    const vec2 size = vec2(float(p.texWidth), float(p.texHeight)) * 8.0;
+    const vec2 st   = vTexel / size;
+
+    vec2 wrapped = fract(st);
+    if ((p.flags & kFlagMirrorX) != 0u && mod(floor(st.x), 2.0) != 0.0) {
+        wrapped.x = 1.0 - wrapped.x;
+    }
+    if ((p.flags & kFlagMirrorY) != 0u && mod(floor(st.y), 2.0) != 0.0) {
+        wrapped.y = 1.0 - wrapped.y;
+    }
+
+    const vec2 rectXY = vec2(float(p.replaceXY & 0xffffu), float(p.replaceXY >> 16));
+    const vec2 rectWH = vec2(float(p.replaceWH & 0xffffu), float(p.replaceWH >> 16));
+
+    // LOD from the continuous coordinates, so the wrap seam never reads as a
+    // jump across the whole texture.
+    const vec2  dx     = texelDx / size * rectWH;
+    const vec2  dy     = texelDy / size * rectWH;
+    const float rho2   = max(dot(dx, dx), dot(dy, dy));
+    const float maxLod = float((p.replace >> 8) & 0xfu);
+    const float lod    = clamp(0.5 * log2(max(rho2, 1.0e-8)), 0.0, maxLod);
+
+    const vec3 coord = vec3((rectXY + wrapped * rectWH) / kReplaceLayerSize,
+                            float((p.replace & 0xffu) - 1u));
+    const vec4 texel = textureLod(uReplace, coord, lod);
+
+    if ((p.flags & kFlagTranslucent) != 0u && texel.a < 0.5) {
+        discard;
+    }
+    const vec3 tint = vec3(float(p.tint & 0x3ffu), float((p.tint >> 10) & 0x3ffu),
+                           float((p.tint >> 20) & 0x3ffu)) / 512.0;
+    return min(texel.rgb * tint, vec3(1.0));
+}
+
 void main()
 {
     const PolyParams p = uPolygon[vPolygon];
+
+    // Before any discard or per-polygon branch, so neighbouring pixels of a
+    // different polygon still take part in the difference.
+    const vec2 texelDx = dFdx(vTexel);
+    const vec2 texelDy = dFdy(vTexel);
 
     // Translucency by stipple: a screen-locked checkerboard on the native raster
     // grid. When the 3D is rasterised at N*native, gl_FragCoord runs at the
@@ -370,6 +424,11 @@ void main()
     if ((p.flags & kFlagChecker) != 0u
         && ((nativePix.x ^ nativePix.y) & 1) == 0) {
         discard;
+    }
+
+    if ((p.flags & kFlagTextured) != 0u && p.replace != 0u) {
+        fragColour = vec4(sampleReplacement(p, texelDx, texelDy), 1.0);
+        return;
     }
 
     uint shade;

@@ -34,6 +34,8 @@ struct RenderPolygon;
 
 namespace sm2::render {
 
+class TextureReplacements;
+
 /// One triangle-list vertex. Twenty-four bytes: where it is, what part of the
 /// texture it names, how far away it is, and which polygon it belongs to.
 ///
@@ -67,6 +69,14 @@ struct PolyParams {
     u32 micro_x;
     u32 micro_y;
     u32 micro_min_lod;
+    /// Custom texture: atlas layer + 1 in bits 7:0 (0 = none) and deepest mip
+    /// level in bits 11:8; its rectangle's corner and size, 16 bits each; and
+    /// the colour ratio against the colouring it was painted over, 10 bits per
+    /// channel in units of 1/512.
+    u32 replace;
+    u32 replace_xy;
+    u32 replace_wh;
+    u32 tint;
 };
 
 /// Bits of PolyParams::flags, mirroring the constants in polygon.frag.
@@ -161,9 +171,11 @@ constexpr u32 kMaxPolygons = 1 << 15;
 /// truncated; the caller is responsible for warning about that once rather
 /// than every frame; `warned` is set true the first time this happens across
 /// calls sharing it, so a caller can log only on the transition to true.
+/// With `replacements`, textured polygons that have one are pointed at it.
 [[nodiscard]] TriangulatedFrame triangulate(const hw::Model2MachineBase* machine,
                                             const hw::Model2Video&       video,
-                                            bool*                        warned);
+                                            bool*                        warned,
+                                            TextureReplacements*         replacements = nullptr);
 
 /// A backend-neutral rectangle in window pixels: a Vulkan `VkViewport`'s twin.
 struct Letterbox {

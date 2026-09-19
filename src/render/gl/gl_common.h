@@ -107,6 +107,8 @@ extern SM2_PFNGLBINDTEXTUREPROC         BindTexture;
 extern PFNGLACTIVETEXTUREPROC           ActiveTexture;
 extern PFNGLTEXSTORAGE2DPROC            TexStorage2D;
 extern PFNGLTEXSTORAGE3DPROC            TexStorage3D;
+extern PFNGLTEXSUBIMAGE3DPROC           TexSubImage3D;
+extern PFNGLGENERATEMIPMAPPROC          GenerateMipmap;
 extern SM2_PFNGLTEXSUBIMAGE2DPROC       TexSubImage2D;
 extern SM2_PFNGLTEXPARAMETERIPROC       TexParameteri;
 extern PFNGLBINDIMAGETEXTUREPROC        BindImageTexture;

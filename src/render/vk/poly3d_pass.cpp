@@ -22,6 +22,7 @@
 #include "hw/geometrizer.h"
 #include "hw/model2_machine_base.h"
 #include "hw/model2_video.h"
+#include "render/texture_replace.h"
 
 #include <vk_mem_alloc.h>
 
@@ -124,14 +125,22 @@ bool Poly3DPass::init(Context& context, u32 render_scale)
     // mixed.
     SM2_VK_TRY(vkCreateSampler(context.device(), &sampler, nullptr, &m_decoded_sampler));
 
+    // Custom textures are ordinary images: trilinear, with the shader choosing
+    // the level itself and wrapping inside the atlas rectangle.
+    sampler.magFilter  = VK_FILTER_LINEAR;
+    sampler.minFilter  = VK_FILTER_LINEAR;
+    sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampler.maxLod     = VK_LOD_CLAMP_NONE;
+    SM2_VK_TRY(vkCreateSampler(context.device(), &sampler, nullptr, &m_atlas_sampler));
+
     m_frame_geometry.vertices.reserve(1 << 14);
     m_frame_geometry.polygons.reserve(1 << 12);
     m_tone_curve.assign(static_cast<usize>(hw::Model2Video::kToneShades)
                             * hw::Model2Video::kToneComponents,
                         0);
 
-    return create_frames() && create_descriptors() && create_polygon_pipelines()
-        && create_decode_pipeline();
+    return create_frames() && create_atlas(1, 1, 1) && create_descriptors()
+        && create_polygon_pipelines() && create_decode_pipeline();
 }
 
 void Poly3DPass::shutdown()
@@ -178,6 +187,13 @@ void Poly3DPass::shutdown()
         }
         target.polygon_set   = VK_NULL_HANDLE;
         target.decode_set    = VK_NULL_HANDLE;
+    }
+
+    destroy_atlas();
+    destroy_host_buffer(&m_atlas_staging);
+    if (m_atlas_sampler != VK_NULL_HANDLE) {
+        vkDestroySampler(device, m_atlas_sampler, nullptr);
+        m_atlas_sampler = VK_NULL_HANDLE;
     }
 
     if (m_decode_pipeline != VK_NULL_HANDLE) {
@@ -370,8 +386,8 @@ bool Poly3DPass::create_descriptors()
     // the tone curve and the per-polygon parameters. Binding 0 used to be the
     // packed sheets as a storage buffer; the decode pass now does the unpacking,
     // so the fragment shader instead samples the image it produces.
-    VkDescriptorSetLayoutBinding polygon_bindings[4]{};
-    for (u32 index = 0; index < 4; ++index) {
+    VkDescriptorSetLayoutBinding polygon_bindings[5]{};
+    for (u32 index = 0; index < 5; ++index) {
         polygon_bindings[index].binding         = index;
         polygon_bindings[index].descriptorCount = 1;
         polygon_bindings[index].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -379,10 +395,11 @@ bool Poly3DPass::create_descriptors()
     }
     polygon_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     polygon_bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    polygon_bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 
     VkDescriptorSetLayoutCreateInfo layout{};
     layout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout.bindingCount = 4;
+    layout.bindingCount = 5;
     layout.pBindings    = polygon_bindings;
     SM2_VK_TRY(vkCreateDescriptorSetLayout(device, &layout, nullptr, &m_polygon_set_layout));
 
@@ -414,8 +431,8 @@ bool Poly3DPass::create_descriptors()
     // Per frame: luma + polygons (polygon set) + sheets (decode set).
     sizes[0].descriptorCount = frames * 3;
     sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    // Per frame: decoded sheets + tone curve (polygon set).
-    sizes[1].descriptorCount = frames * 2;
+    // Per frame: decoded sheets + tone curve + custom-texture atlas (polygon set).
+    sizes[1].descriptorCount = frames * 3;
     sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     // Per frame: decoded sheets (decode set).
     sizes[2].descriptorCount = frames;
@@ -460,7 +477,12 @@ bool Poly3DPass::create_descriptors()
         decode_target.imageView   = target.decoded_view;
         decode_target.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-        VkWriteDescriptorSet writes[6]{};
+        VkDescriptorImageInfo atlas{};
+        atlas.sampler     = m_atlas_sampler;
+        atlas.imageView   = m_atlas_view;
+        atlas.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet writes[7]{};
         for (VkWriteDescriptorSet& write : writes) {
             write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.descriptorCount = 1;
@@ -495,7 +517,12 @@ bool Poly3DPass::create_descriptors()
         writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         writes[5].pImageInfo     = &decode_target;
 
-        vkUpdateDescriptorSets(device, 6, writes, 0, nullptr);
+        writes[6].dstSet         = target.polygon_set;
+        writes[6].dstBinding     = 4;
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[6].pImageInfo     = &atlas;
+
+        vkUpdateDescriptorSets(device, 7, writes, 0, nullptr);
     }
     return true;
 }
@@ -838,17 +865,224 @@ void Poly3DPass::decode_textures()
                          VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 }
 
+namespace {
+
+void record_level_barrier(VkCommandBuffer cmd, VkImage image, u32 level, u32 levels,
+                          VkImageLayout old_layout, VkImageLayout new_layout,
+                          VkPipelineStageFlags2 src_stage, VkAccessFlags2 src_access,
+                          VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access)
+{
+    VkImageMemoryBarrier2 barrier{};
+    barrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    barrier.srcStageMask        = src_stage;
+    barrier.srcAccessMask       = src_access;
+    barrier.dstStageMask        = dst_stage;
+    barrier.dstAccessMask       = dst_access;
+    barrier.oldLayout           = old_layout;
+    barrier.newLayout           = new_layout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image               = image;
+    barrier.subresourceRange =
+        VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, level, levels, 0,
+                                VK_REMAINING_ARRAY_LAYERS};
+
+    VkDependencyInfo dependency{};
+    dependency.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependency.imageMemoryBarrierCount = 1;
+    dependency.pImageMemoryBarriers    = &barrier;
+    vkCmdPipelineBarrier2(cmd, &dependency);
+}
+
+}  // namespace
+
+bool Poly3DPass::create_atlas(u32 size, u32 layers, u32 mips)
+{
+    VkImageCreateInfo image{};
+    image.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image.imageType     = VK_IMAGE_TYPE_2D;
+    image.format        = VK_FORMAT_R8G8B8A8_UNORM;
+    image.extent        = VkExtent3D{size, size, 1};
+    image.mipLevels     = mips;
+    image.arrayLayers   = layers;
+    image.samples       = VK_SAMPLE_COUNT_1_BIT;
+    image.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    image.usage         = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                        | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VmaAllocationCreateInfo allocation{};
+    allocation.usage = VMA_MEMORY_USAGE_AUTO;
+    SM2_VK_TRY(vmaCreateImage(m_context->allocator(), &image, &allocation, &m_atlas,
+                              &m_atlas_alloc, nullptr));
+
+    VkImageViewCreateInfo view{};
+    view.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view.image    = m_atlas;
+    view.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    view.format   = VK_FORMAT_R8G8B8A8_UNORM;
+    view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view.subresourceRange.levelCount = mips;
+    view.subresourceRange.layerCount = layers;
+    SM2_VK_TRY(vkCreateImageView(m_context->device(), &view, nullptr, &m_atlas_view));
+
+    m_atlas_size   = size;
+    m_atlas_layers = layers;
+    m_atlas_mips   = mips;
+    m_atlas_ready  = false;
+    return true;
+}
+
+void Poly3DPass::destroy_atlas()
+{
+    if (m_atlas_view != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_context->device(), m_atlas_view, nullptr);
+        m_atlas_view = VK_NULL_HANDLE;
+    }
+    if (m_atlas != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_context->allocator(), m_atlas, m_atlas_alloc);
+        m_atlas       = VK_NULL_HANDLE;
+        m_atlas_alloc = nullptr;
+    }
+}
+
+void Poly3DPass::sync_replacements()
+{
+    const bool wanted = m_replacements != nullptr && !m_replacements->empty()
+                     && m_replacements->layer_count() != 0;
+    const u64 generation = wanted ? m_replacements->generation() : 0;
+    if (m_atlas_ready && generation == m_atlas_generation) {
+        return;
+    }
+
+    const VkCommandBuffer cmd = m_context->cmd();
+    const bool swap = generation != m_atlas_generation;
+    if (swap) {
+        // Rare (a game load or a reload), so the simplest safe point to replace
+        // what every frame's descriptor set names is with the device idle.
+        vkDeviceWaitIdle(m_context->device());
+        destroy_atlas();
+        destroy_host_buffer(&m_atlas_staging);
+
+        bool have_pixels = generation != 0;
+        for (u32 layer = 0; have_pixels && layer < m_replacements->layer_count(); ++layer) {
+            have_pixels = !m_replacements->layer_pixels(layer).empty();
+        }
+        const u32  size   = have_pixels ? kReplacementLayerSize : 1u;
+        const u32  layers = have_pixels ? m_replacements->layer_count() : 1u;
+        const u32  mips   = have_pixels ? TextureReplacements::mip_levels() : 1u;
+        const VkDeviceSize layer_bytes = static_cast<VkDeviceSize>(size) * size * 4;
+        if (have_pixels
+            && (!create_atlas(size, layers, mips)
+                || !create_host_buffer(layer_bytes * layers, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                       &m_atlas_staging))) {
+            SM2_ERROR("3d: could not allocate the custom texture atlas; drawing without it");
+            destroy_atlas();
+            destroy_host_buffer(&m_atlas_staging);
+            have_pixels = false;
+        }
+        if (!have_pixels && !create_atlas(1, 1, 1)) {
+            return;
+        }
+
+        if (have_pixels) {
+            auto* bytes = static_cast<u8*>(m_atlas_staging.mapped);
+            for (u32 layer = 0; layer < layers; ++layer) {
+                std::memcpy(bytes + layer_bytes * layer,
+                            m_replacements->layer_pixels(layer).data(), layer_bytes);
+            }
+            m_replacements->release_pixels();
+        }
+        m_atlas_generation = generation;
+        m_atlas_live       = have_pixels;
+
+        VkDescriptorImageInfo atlas{};
+        atlas.sampler     = m_atlas_sampler;
+        atlas.imageView   = m_atlas_view;
+        atlas.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        for (Frame& target : m_frames) {
+            VkWriteDescriptorSet write{};
+            write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet          = target.polygon_set;
+            write.dstBinding      = 4;
+            write.descriptorCount = 1;
+            write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo      = &atlas;
+            vkUpdateDescriptorSets(m_context->device(), 1, &write, 0, nullptr);
+        }
+    }
+
+    if (!m_atlas_live) {
+        // The placeholder is never sampled; it only needs a valid layout.
+        record_level_barrier(cmd, m_atlas, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_NONE, 0,
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        m_atlas_ready = true;
+        return;
+    }
+
+    record_level_barrier(cmd, m_atlas, 0, m_atlas_mips, VK_IMAGE_LAYOUT_UNDEFINED,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE, 0,
+                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = m_atlas_layers;
+    region.imageExtent                 = VkExtent3D{m_atlas_size, m_atlas_size, 1};
+    vkCmdCopyBufferToImage(cmd, m_atlas_staging.handle, m_atlas,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    // Each level from the one above, as the atlas is too large to build its
+    // chain on the host at load time without a noticeable pause.
+    for (u32 level = 1; level < m_atlas_mips; ++level) {
+        record_level_barrier(cmd, m_atlas, level - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        const s32 from = static_cast<s32>(std::max(m_atlas_size >> (level - 1), 1u));
+        const s32 to   = static_cast<s32>(std::max(m_atlas_size >> level, 1u));
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, m_atlas_layers};
+        blit.srcOffsets[1]  = VkOffset3D{from, from, 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, m_atlas_layers};
+        blit.dstOffsets[1]  = VkOffset3D{to, to, 1};
+        vkCmdBlitImage(cmd, m_atlas, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_atlas,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+    }
+
+    if (m_atlas_mips > 1) {
+        record_level_barrier(cmd, m_atlas, 0, m_atlas_mips - 1,
+                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    }
+    record_level_barrier(cmd, m_atlas, m_atlas_mips - 1, 1,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    m_atlas_ready = true;
+}
+
 void Poly3DPass::build(const hw::Model2MachineBase* machine, const hw::Model2Video& video)
 {
     if (machine != nullptr) {
         refresh_machine_data(*machine, video);
     }
+    sync_replacements();
 
     // Triangulation, texture-header unpacking and scissor batching are
     // backend-neutral (render::triangulate()); see render/geometry.h's own
     // doc comment for why this moved out of Poly3DPass rather than staying
     // duplicated per backend.
-    m_frame_geometry = render::triangulate(machine, video, &m_capacity_warned);
+    m_frame_geometry = render::triangulate(machine, video, &m_capacity_warned,
+                                           m_atlas_live ? m_replacements : nullptr);
 
     m_vertex_count = static_cast<u32>(m_frame_geometry.vertices.size());
     if (m_vertex_count != 0) {

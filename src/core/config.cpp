@@ -473,6 +473,14 @@ bool load_config(const std::string& path, Config* out, std::vector<std::string>*
             if (!parse_upscale_2d(value, &out->upscale_2d)) {
                 bad_value();
             }
+        } else if (key == "custom_textures") {
+            if (!parse_bool(value, &out->custom_textures)) {
+                bad_value();
+            }
+        } else if (key == "dump_textures") {
+            if (!parse_bool(value, &out->dump_textures)) {
+                bad_value();
+            }
         } else if (key == "gpu") {
             out->gpu = value;
         } else if (key == "graphics_backend") {
@@ -739,6 +747,13 @@ bool save_config(const std::string& path, const Config& config)
         << "texture_filter = " << texture_filter_name(config.texture_filter) << "\n"
         << "anisotropy = " << config.anisotropy << "\n"
         << "upscale_2d = " << upscale_2d_name(config.upscale_2d) << "\n"
+        << "\n"
+        << "# Custom textures: images in <saves>/textures/<game>/load named as\n"
+        << "# dumped replace the game's own, at any whole multiple of the size.\n"
+        << "# dump_textures writes every texture drawn, with a browsable\n"
+        << "# index.html, to <saves>/textures/<game>/dump when the game exits.\n"
+        << "custom_textures = " << bool_text(config.custom_textures) << "\n"
+        << "dump_textures = " << bool_text(config.dump_textures) << "\n"
         << "\n"
         << "# Exact device name as --list-gpus prints it. Empty picks the best one.\n"
         << "gpu = " << config.gpu << "\n"

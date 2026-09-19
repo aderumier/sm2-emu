@@ -32,6 +32,10 @@ class Model2MachineBase;
 class Model2Video;
 }  // namespace sm2::hw
 
+namespace sm2::render {
+class TextureReplacements;
+}
+
 namespace sm2::render::gl {
 
 class Poly3DPass {
@@ -63,6 +67,12 @@ public:
     /// tap ceiling). Uploaded to the shader each draw; live, no realloc.
     void set_texture_quality(u32 quality) { m_texture_quality = quality; }
 
+    /// Custom textures to draw in place of the hardware's, or null for none.
+    void set_texture_replacements(TextureReplacements* replacements)
+    {
+        m_replacements = replacements;
+    }
+
     /// As render::vk::Poly3DPass::build(): triangulate this frame's polygons
     /// and refresh whatever machine memory changed since it last ran.
     void build(const hw::Model2MachineBase* machine, const hw::Model2Video& video);
@@ -85,6 +95,8 @@ private:
     void               refresh_machine_data(const hw::Model2MachineBase& machine,
                                            const hw::Model2Video&       video);
     void               decode_textures();
+    /// Bring the atlas in line with m_replacements.
+    void               sync_replacements();
 
     // -- the 3D draw ------------------------------------------------------
 
@@ -122,6 +134,13 @@ private:
     u32 m_render_scale = 1;
 
     u32 m_texture_quality = 0;  ///< 0 = faithful single-tap, else tap ceiling
+
+    // -- custom textures ---------------------------------------------------
+
+    TextureReplacements* m_replacements     = nullptr;
+    u32                  m_atlas_texture    = 0;  ///< GL_TEXTURE_2D_ARRAY, RGBA8
+    u64                  m_atlas_generation = 0;
+    bool                 m_atlas_live       = false;
 };
 
 }  // namespace sm2::render::gl

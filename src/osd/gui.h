@@ -154,6 +154,17 @@ public:
         m_caps_max_anisotropy = max_anisotropy;
     }
 
+    /// How many custom textures the running game has loaded, for the settings.
+    void set_custom_texture_count(usize count) { m_custom_texture_count = count; }
+
+    /// True once after the user asked for custom textures to be read again.
+    [[nodiscard]] bool take_texture_reload_request()
+    {
+        const bool out = m_texture_reload_requested;
+        m_texture_reload_requested = false;
+        return out;
+    }
+
     /// Pixel extent of the backend's overlay framebuffer; new_frame() scales
     /// ImGui to it so the overlay fills the presented image (see new_frame()).
     /// Zero leaves ImGui's own value alone.
@@ -253,6 +264,9 @@ private:
     /// GPU capabilities for gating the enhancement options (set each frame).
     bool  m_caps_anisotropy     = false;
     float m_caps_max_anisotropy = 1.0F;
+
+    usize m_custom_texture_count     = 0;
+    bool  m_texture_reload_requested = false;
 
     // -- wheel calibration capture state -----------------------------------
     // Which control (if any) is currently waiting for the user to operate it,

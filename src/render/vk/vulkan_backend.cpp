@@ -213,6 +213,11 @@ void VulkanBackend::set_present_options(const PresentOptions& options)
     m_present.set_options(options);
 }
 
+void VulkanBackend::set_texture_replacements(TextureReplacements* replacements)
+{
+    m_polygons.set_texture_replacements(replacements);
+}
+
 void VulkanBackend::set_enhancement_options(const EnhancementOptions& options)
 {
     m_enhancement_options = options;

@@ -41,6 +41,8 @@
 #include "osd/scraper.h"
 #include "osd/window.h"
 #include "render/backend.h"
+#include "render/texture_dump.h"
+#include "render/texture_replace.h"
 #include "rom/game_db.h"
 #include "rom/rom_loader.h"
 
@@ -192,6 +194,9 @@ struct Options {
     /// survive the two emulators sitting on different attract pages.
     std::string poly_log;
 
+    /// Write every texture the 3D samples to <saves>/textures/<game>/dump.
+    bool dump_textures = false;
+
     /// Also render each captured frame on the CPU, through the port of MAME's own
     /// rasteriser, and write it beside the screenshot. Both come from the same
     /// machine state, so a difference between them is the renderer and nothing
@@ -255,6 +260,7 @@ void print_usage()
         "  -h, --help          Show this message\n"
         "      --config <dir>  Directory holding sm2-emu.ini, used for both\n"
         "                      reading and saving settings\n"
+        "      --dump-textures Write every 3D texture to <saves>/textures/<game>/dump\n"
         "      --fullscreen    Start filling the screen\n"
         "      --game <name>   Load this set specifically, for archives that\n"
         "                      hold several revisions; with no path given, the\n"
@@ -280,6 +286,18 @@ void print_usage()
         "\n");
     sm2::osd::Input::print_bindings();
     std::printf("\nNo ROM data is distributed with this software.\n");
+}
+
+[[nodiscard]] std::string texture_dump_directory(const sm2::Config& config,
+                                                 const std::string& game)
+{
+    return (std::filesystem::path(config.nvram_dir) / "textures" / game / "dump").string();
+}
+
+[[nodiscard]] std::string texture_load_directory(const sm2::Config& config,
+                                                 const std::string& game)
+{
+    return (std::filesystem::path(config.nvram_dir) / "textures" / game / "load").string();
 }
 
 [[nodiscard]] bool parse_command_line(int argc, char** argv, Options* out)
@@ -489,6 +507,8 @@ void print_usage()
             out->given.screenshot_dir = true;
         } else if (takes_value("--dump-audio", &out->dump_audio)) {
             // handled
+        } else if (std::strcmp(arg, "--dump-textures") == 0) {
+            out->dump_textures = true;
         } else if (takes_value("--poly-log", &out->poly_log)) {
         } else if (takes_value("--dump-tilemap", &out->dump_tilemap)) {
             // handled
@@ -780,6 +800,8 @@ int main(int argc, char** argv)
     options.config.texture_filter = from_file.texture_filter;
     options.config.anisotropy     = from_file.anisotropy;
     options.config.upscale_2d     = from_file.upscale_2d;
+    options.config.custom_textures = from_file.custom_textures;
+    options.config.dump_textures   = from_file.dump_textures;
 
     // Renderer: --graphics-backend wins, else the saved choice selects it. The
     // config string is kept populated either way so the GUI round-trips it.
@@ -1252,6 +1274,11 @@ int main(int argc, char** argv)
 
         int exit_code_boot_test = 0;
         std::vector<s16> recorded;
+        std::optional<render::TextureDumper> texture_dumper;
+        if (options.dump_textures) {
+            texture_dumper.emplace(texture_dump_directory(options.config, loaded->game.name),
+                                   loaded->game.name);
+        }
         if (!options.dump_audio.empty()) {
             // About 767 stereo frames per video frame.
             recorded.reserve(static_cast<usize>(options.boot_test) * 800 * 2);
@@ -1285,6 +1312,9 @@ int main(int argc, char** argv)
                 machine_iface->inputs().in1 = static_cast<u8>(0xff & ~press.in1);
             }
             machine_iface->run_frame();
+            if (texture_dumper) {
+                texture_dumper->scan(*machine_iface);
+            }
 
             // A numbered software frame every so often, so one headless run can be
             // searched for the instant that lines up with a MAME capture instead of
@@ -1600,6 +1630,10 @@ int main(int argc, char** argv)
                                       the_sound->sample_rate())) {
                 exit_code_boot_test = 1;
             }
+        }
+
+        if (texture_dumper) {
+            texture_dumper->finish(machine_iface);
         }
 
         machine_iface->save_nvram();
@@ -1953,6 +1987,14 @@ int main(int argc, char** argv)
         };
         window.set_title(build_title());
 
+        std::optional<render::TextureDumper> texture_dumper;
+        std::string                          texture_dump_game;
+
+        // Custom textures for the running game; the backend holds a pointer,
+        // so it is cleared there before this is replaced or freed.
+        std::unique_ptr<render::TextureReplacements> replacements;
+        std::string                                  replacements_game;
+
         while (running) {
             const u64 frame_start_ns = SDL_GetTicksNS();
 
@@ -2074,6 +2116,45 @@ int main(int argc, char** argv)
                 pacer.resync();
             }
 
+            {
+                const std::string wanted = machine_iface != nullptr && loaded.has_value()
+                                                   && options.config.custom_textures
+                                               ? loaded->game.name
+                                               : std::string();
+                const bool reload = gui.take_texture_reload_request();
+                if (wanted != replacements_game || (reload && !wanted.empty())) {
+                    replacements_game = wanted;
+                    if (wanted.empty()) {
+                        backend->set_texture_replacements(nullptr);
+                        replacements.reset();
+                    } else {
+                        if (!replacements) {
+                            replacements = std::make_unique<render::TextureReplacements>();
+                        }
+                        (void)replacements->load(texture_load_directory(options.config, wanted));
+                        backend->set_texture_replacements(replacements.get());
+                    }
+                    gui.set_custom_texture_count(replacements ? replacements->size() : 0);
+                }
+            }
+
+            {
+                const bool dumping = machine_iface != nullptr && loaded.has_value()
+                                  && (options.dump_textures || options.config.dump_textures);
+                const bool same_game =
+                    loaded.has_value() && texture_dump_game == loaded->game.name;
+                if (texture_dumper && (!dumping || !same_game)) {
+                    texture_dumper->finish(same_game ? machine_iface : nullptr);
+                    texture_dumper.reset();
+                }
+                if (dumping && !texture_dumper) {
+                    texture_dump_game = loaded->game.name;
+                    texture_dumper.emplace(
+                        texture_dump_directory(options.config, texture_dump_game),
+                        texture_dump_game);
+                }
+            }
+
             if (machine_iface && !effective_pause) {
                 // Inputs are levels, sampled whenever the program polls the I/O
                 // controller during the frame, so they have to be set before the
@@ -2106,6 +2187,9 @@ int main(int argc, char** argv)
                 {
                     auto scope = core::maybe_scope(stage_run_frame, profile_sample);
                     machine_iface->run_frame();
+                }
+                if (texture_dumper) {
+                    texture_dumper->scan(*machine_iface);
                 }
                 if (profile_sample) {
                     // Read straight back out rather than timed separately: the
@@ -2629,6 +2713,12 @@ int main(int argc, char** argv)
                 window.set_title(build_title());
             }
         }
+
+        if (texture_dumper) {
+            texture_dumper->finish(machine_iface);
+            texture_dumper.reset();
+        }
+        backend->set_texture_replacements(nullptr);
 
         if (frames_written_off != 0) {
             SM2_INFO("%u frame(s) were written off after falling behind",

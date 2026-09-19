@@ -575,6 +575,34 @@ void Gui::draw_settings(Config& config, const std::vector<std::string>& gpu_name
                         "ScaleFX round diagonals; Faithful keeps crisp pixels.\n"
                         "Applies live.");
                 }
+
+                ImGui::Checkbox("Custom textures", &config.custom_textures);
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Replace the game's 3D textures with images saved in\n"
+                        "saves/textures/<game>/load, named as dumped. GPU\n"
+                        "renderers only; Reload picks up edited files.");
+                }
+                if (config.custom_textures) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("%zu loaded", m_custom_texture_count);
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Reload")) {
+                        m_texture_reload_requested = true;
+                    }
+                }
+
+                ImGui::Checkbox("Dump textures", &config.dump_textures);
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "Collect every 3D texture the game draws and write them,\n"
+                        "with an index.html to browse, to saves/textures/<game>/dump\n"
+                        "when the game exits or this is turned off.");
+                }
             }
 
             ImGui::EndTabItem();
