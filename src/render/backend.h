@@ -62,6 +62,10 @@ struct Capabilities {
     /// means the anisotropic option is unavailable.
     bool  anisotropy     = false;
     float max_anisotropy = 1.0F;
+
+    /// Whether the fill-mask attachment carries depth, which Blended
+    /// translucency uses to order its second pass.
+    bool blended_translucency = false;
 };
 
 /// A native RGBA8 pixel format identifier, backend-neutral.
@@ -184,6 +188,7 @@ struct EnhancementOptions {
     TextureFilter texture_filter = TextureFilter::Faithful;
     u32           anisotropy     = 4;  // tap ceiling, clamped to the GPU max
     Upscale2D     upscale_2d     = Upscale2D::Faithful;
+    Translucency  translucency   = Translucency::Stipple;
 };
 
 /// What the backend is asked to draw into and present onto.

@@ -99,18 +99,17 @@ bool PresentPass::create_target()
     TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     // The 3D pass draws its fill mask into this framebuffer now, so it carries a
-    // stencil sized to match the colour attachment. GL_STENCIL_INDEX8 is a
-    // mandatory renderable format at this floor, matching gl_poly3d_pass's old
-    // offscreen stencil renderbuffer exactly.
+    // stencil sized to match the colour attachment, with depth for blended
+    // translucency to order its pass by. Both are mandatory at this floor.
     GenRenderbuffers(1, &m_stencil_renderbuffer);
     BindRenderbuffer(GL_RENDERBUFFER, m_stencil_renderbuffer);
-    RenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, w, h);
+    RenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
 
     GenFramebuffers(1, &m_fbo);
     BindFramebuffer(GL_FRAMEBUFFER, m_fbo);
     FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_native_texture,
                         0);
-    FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
+    FramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                            m_stencil_renderbuffer);
     if (CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         SM2_ERROR("gl: present pass framebuffer is incomplete");

@@ -24,6 +24,7 @@
 #include "render/texture_replace.h"
 
 #include <algorithm>
+#include <cstddef>
 
 namespace sm2::render {
 namespace {
@@ -111,7 +112,8 @@ PolyParams describe_polygon(const hw::RenderPolygon& poly, const hw::Model2Video
 TriangulatedFrame triangulate(const hw::Model2MachineBase* machine,
                               const hw::Model2Video&       video,
                               bool*                        warned,
-                              TextureReplacements*         replacements)
+                              TextureReplacements*         replacements,
+                              bool                         blend_translucency)
 {
     TriangulatedFrame frame;
     if (machine == nullptr) {
@@ -123,6 +125,16 @@ TriangulatedFrame triangulate(const hw::Model2MachineBase* machine,
     if (replacements != nullptr) {
         replacements->begin_frame(*machine, video);
     }
+
+    // Blended polygons are held back and appended after everything else in
+    // reverse, so each blends over what is behind it.
+    struct Deferred {
+        ScissorRect scissor;
+        u32         first_vertex = 0;
+        u32         vertex_count = 0;
+    };
+    std::vector<Vertex>   deferred_vertices;
+    std::vector<Deferred> deferred;
 
     for (const hw::RenderPolygon& poly : machine->render_list().polygons) {
         // Untextured and translucent is the one combination the hardware
@@ -151,7 +163,7 @@ TriangulatedFrame triangulate(const hw::Model2MachineBase* machine,
         }
 
         const u32 triangles = static_cast<u32>(poly.num_vertices) - 2u;
-        if (frame.vertices.size() + triangles * 3u > kMaxVertices
+        if (frame.vertices.size() + deferred_vertices.size() + triangles * 3u > kMaxVertices
             || frame.polygons.size() >= kMaxPolygons) {
             if (warned != nullptr && !*warned) {
                 *warned = true;
@@ -167,7 +179,34 @@ TriangulatedFrame triangulate(const hw::Model2MachineBase* machine,
         if (replacements != nullptr && (params.flags & kFlagTextured) != 0) {
             replacements->resolve(*machine, video, poly, &params);
         }
+        const bool blended = blend_translucency && (params.flags & kFlagChecker) != 0;
+        if (blended) {
+            params.flags = (params.flags & ~kFlagChecker) | kFlagBlended;
+        }
         frame.polygons.push_back(params);
+
+        // A fan. The clipper produces convex polygons, so fanning from the
+        // first vertex cannot fold over itself.
+        const auto emit_fan = [&](std::vector<Vertex>& out) {
+            const auto emit = [&](u32 corner) {
+                const hw::PolyVertex& v = poly.v[corner];
+                out.push_back(Vertex{v.x, v.y, v.p[1], v.p[2], v.p[0], index});
+            };
+            for (u32 corner = 1; corner + 1 < poly.num_vertices; ++corner) {
+                emit(0);
+                emit(corner);
+                emit(corner + 1);
+            }
+        };
+
+        if (blended) {
+            const u32 first = static_cast<u32>(deferred_vertices.size());
+            emit_fan(deferred_vertices);
+            deferred.push_back(
+                Deferred{scissor, first, static_cast<u32>(deferred_vertices.size()) - first});
+            ++frame.drawn_polygons;
+            continue;
+        }
 
         const bool can_early = (params.flags & (kFlagChecker | kFlagTranslucent)) == 0;
 
@@ -183,21 +222,27 @@ TriangulatedFrame triangulate(const hw::Model2MachineBase* machine,
                 Batch{scissor, static_cast<u32>(frame.vertices.size()), 0, can_early});
         }
 
-        // A fan. The clipper produces convex polygons, so fanning from the
-        // first vertex cannot fold over itself.
-        const auto emit = [&](u32 corner) {
-            const hw::PolyVertex& v = poly.v[corner];
-            frame.vertices.push_back(Vertex{v.x, v.y, v.p[1], v.p[2], v.p[0], index});
-        };
-        for (u32 corner = 1; corner + 1 < poly.num_vertices; ++corner) {
-            emit(0);
-            emit(corner);
-            emit(corner + 1);
-        }
+        emit_fan(frame.vertices);
 
         frame.batches.back().vertex_count =
             static_cast<u32>(frame.vertices.size()) - frame.batches.back().first_vertex;
         ++frame.drawn_polygons;
+    }
+
+    for (auto it = deferred.rbegin(); it != deferred.rend(); ++it) {
+        const ScissorRect& scissor = it->scissor;
+        if (frame.batches.empty() || !frame.batches.back().blended
+            || frame.batches.back().scissor.x != scissor.x
+            || frame.batches.back().scissor.y != scissor.y
+            || frame.batches.back().scissor.width != scissor.width
+            || frame.batches.back().scissor.height != scissor.height) {
+            frame.batches.push_back(
+                Batch{scissor, static_cast<u32>(frame.vertices.size()), 0, false, true});
+        }
+        const auto first = deferred_vertices.begin() + static_cast<std::ptrdiff_t>(it->first_vertex);
+        frame.vertices.insert(frame.vertices.end(), first,
+                              first + static_cast<std::ptrdiff_t>(it->vertex_count));
+        frame.batches.back().vertex_count += it->vertex_count;
     }
 
     return frame;

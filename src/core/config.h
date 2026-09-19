@@ -50,6 +50,11 @@ enum class TextureFilter : u32 { Faithful, Anisotropic };
 /// falls back to Faithful where unsupported.
 enum class Upscale2D : u32 { Faithful, Xbr, ScaleFx };
 
+/// 3D translucency. Stipple is the hardware's screen-locked checkerboard;
+/// Blended draws those polygons as the 50% blend the stipple is trying to achieve.
+/// GPU-gated; falls back to Stipple where unsupported.
+enum class Translucency : u32 { Stipple, Blended };
+
 /// Settings worth keeping between runs.
 ///
 /// Deliberately only the persistent ones. Anything that describes a single run,
@@ -137,6 +142,7 @@ struct Config {
     TextureFilter texture_filter = TextureFilter::Faithful;
     u32           anisotropy     = 4;
     Upscale2D     upscale_2d     = Upscale2D::Faithful;
+    Translucency  translucency   = Translucency::Stipple;
 
     /// Replacement textures from <saves>/textures/<game>/load, and dumping
     /// every texture the 3D draws to <saves>/textures/<game>/dump.

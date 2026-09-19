@@ -303,6 +303,10 @@ like the arcade:
   blurry in the distance. The quality is clamped to what the GPU reports.
 - **2D upscale** — xBR or ScaleFX edge-smooth the 2D layers (HUD, text, menus)
   so diagonals read as clean slopes rather than stairsteps.
+- **Translucency** — the hardware draws see-through surfaces (spotlights, glass,
+  shadows) as a checkerboard; Blended draws them as the 50% see-through
+  surface the checkerboard is trying to achieve. Overlapping ones build up
+  rather than hiding each other, which the hardware cannot do.
 
 ### Custom textures
 

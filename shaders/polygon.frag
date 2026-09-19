@@ -126,6 +126,7 @@ const uint kFlagMicro     = 1u << 7;
 /// Deepest mipmap level, in bits 11:8. Levels stop at two by two.
 const uint kMaxLevelShift = 8u;
 const uint kFlagTranslucent = 1u << 12;
+const uint kFlagBlended     = 1u << 13;
 
 // ---------------------------------------------------------------------------
 // Texel fetch
@@ -426,8 +427,11 @@ void main()
         discard;
     }
 
+    // The stipple's 50%, premultiplied for the pass's over blend.
+    const float coverage = ((p.flags & kFlagBlended) != 0u) ? 0.5 : 1.0;
+
     if ((p.flags & kFlagTextured) != 0u && p.replace != 0u) {
-        fragColour = vec4(sampleReplacement(p, texelDx, texelDy), 1.0);
+        fragColour = vec4(sampleReplacement(p, texelDx, texelDy) * coverage, coverage);
         return;
     }
 
@@ -522,5 +526,5 @@ void main()
 
     // Opaque, and premultiplied trivially, because the compositor blends this
     // against the tilemap layers behind it.
-    fragColour = vec4(colour, 1.0);
+    fragColour = vec4(colour * coverage, coverage);
 }

@@ -576,6 +576,33 @@ void Gui::draw_settings(Config& config, const std::vector<std::string>& gpu_name
                         "Applies live.");
                 }
 
+                // Translucency. Blended needs a depth-capable fill mask; grey it
+                // out and force Stipple where the renderer has none.
+                static constexpr std::array<const char*, 2> kTranslucencyLabels = {
+                    "Stipple", "Blended"};
+                int translucency = std::clamp(static_cast<int>(config.translucency), 0, 1);
+                if (!m_caps_blended) {
+                    config.translucency = Translucency::Stipple;
+                    translucency        = 0;
+                    ImGui::BeginDisabled();
+                }
+                ImGui::SetNextItemWidth(160);
+                if (ImGui::Combo("Translucency", &translucency, kTranslucencyLabels.data(),
+                                 static_cast<int>(kTranslucencyLabels.size()))) {
+                    config.translucency = static_cast<Translucency>(translucency);
+                }
+                if (!m_caps_blended) {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "The hardware draws see-through surfaces (lights, glass,\n"
+                        "shadows) as a checkerboard. Blended draws the 50%%\n"
+                        "see-through surface it's trying to achieve. Applies live.");
+                }
+
                 ImGui::Checkbox("Custom textures", &config.custom_textures);
                 ImGui::SameLine();
                 ImGui::TextDisabled("(?)");

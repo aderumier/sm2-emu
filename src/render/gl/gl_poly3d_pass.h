@@ -67,6 +67,9 @@ public:
     /// tap ceiling). Uploaded to the shader each draw; live, no realloc.
     void set_texture_quality(u32 quality) { m_texture_quality = quality; }
 
+    /// Draw the stipple as the 50% blend it's trying to achieve.
+    void set_blend_translucency(bool blend) { m_blend_translucency = blend; }
+
     /// Custom textures to draw in place of the hardware's, or null for none.
     void set_texture_replacements(TextureReplacements* replacements)
     {
@@ -134,6 +137,8 @@ private:
     u32 m_render_scale = 1;
 
     u32 m_texture_quality = 0;  ///< 0 = faithful single-tap, else tap ceiling
+
+    bool m_blend_translucency = false;
 
     // -- custom textures ---------------------------------------------------
 

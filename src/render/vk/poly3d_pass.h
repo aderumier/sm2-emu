@@ -90,6 +90,10 @@ public:
     /// tap ceiling). Pushed to the shader each draw; live, no reallocation.
     void set_texture_quality(u32 quality) { m_texture_quality = quality; }
 
+    /// Draw the stipple as the 50% blend it's trying to achieve. Needs a fill
+    /// mask with depth; ignored without one.
+    void set_blend_translucency(bool blend) { m_blend_translucency = blend; }
+
     /// Custom textures to draw in place of the hardware's, or null for none.
     /// The atlas is uploaded by the next build() whenever this or its contents
     /// change.
@@ -242,6 +246,8 @@ private:
 
     [[nodiscard]] Frame& frame();
 
+    [[nodiscard]] bool blending() const { return m_blend_translucency && m_stencil_has_depth; }
+
     Context* m_context = nullptr;
 
     VkFormat m_colour_format  = VK_FORMAT_R8G8B8A8_UNORM;
@@ -278,6 +284,8 @@ private:
     u32 m_render_scale = 1;
 
     u32 m_texture_quality = 0;  ///< 0 = faithful single-tap, else tap ceiling
+
+    bool m_blend_translucency = false;
 
     // -- custom textures ---------------------------------------------------
 

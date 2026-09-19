@@ -74,7 +74,13 @@ void main()
     // positive; the floor only guards against a denormal reaching the divide.
     float w = max(inDepth, 1.0e-6);
 
-    gl_Position = vec4(ndc * w, 0.0, w);
+    // Depth is the polygon's place in the draw order, nearest first. Only the
+    // blended translucency pass tests it; the fill mask orders everything else.
+    float order = float(inPolygon + 1u) / 32769.0;
+#ifdef SM2_TARGET_GL
+    order = order * 2.0 - 1.0;
+#endif
+    gl_Position = vec4(ndc * w, order * w, w);
     vTexel      = inTexel;
     vPolygon    = inPolygon;
 }

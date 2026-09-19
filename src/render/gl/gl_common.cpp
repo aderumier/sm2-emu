@@ -88,6 +88,8 @@ namespace sm2::render::gl {
     F(Enable, SM2_PFNGLENABLEPROC) \
     F(Disable, SM2_PFNGLDISABLEPROC) \
     F(StencilFunc, SM2_PFNGLSTENCILFUNCPROC) \
+    F(DepthFunc, SM2_PFNGLDEPTHFUNCPROC) \
+    F(DepthMask, SM2_PFNGLDEPTHMASKPROC) \
     F(StencilOp, SM2_PFNGLSTENCILOPPROC) \
     F(StencilMask, SM2_PFNGLSTENCILMASKPROC) \
     F(Clear, SM2_PFNGLCLEARPROC) \

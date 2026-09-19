@@ -553,16 +553,15 @@ bool Context::select_physical_device(const ContextConfig& config)
 
 void Context::pick_stencil_format()
 {
-    // S8_UINT first: Model 2 needs a stencil-only fill mask and no depth at
-    // all, so a stencil-only attachment is both correct and the cheapest thing
-    // to keep in tile memory. It is optional in Vulkan, however, and notably
-    // absent on much NVIDIA hardware, hence the combined fallbacks whose depth
-    // aspect simply goes unused.
+    // Model 2 itself needs only a stencil fill mask, but blended translucency
+    // orders its second pass by depth, so a combined format comes first. The
+    // attachment is never stored, so on a tiler the depth stays in tile memory.
+    // S8_UINT is the last resort, leaving blended translucency unavailable.
     constexpr VkFormat candidates[] = {
-        VK_FORMAT_S8_UINT,
-        VK_FORMAT_D32_SFLOAT_S8_UINT,
         VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
         VK_FORMAT_D16_UNORM_S8_UINT,
+        VK_FORMAT_S8_UINT,
     };
 
     for (VkFormat format : candidates) {
@@ -573,7 +572,7 @@ void Context::pick_stencil_format()
             m_stencil_format = format;
             SM2_INFO("fill-mask attachment format: %s",
                      format == VK_FORMAT_S8_UINT ? "S8_UINT (stencil only)"
-                                                 : "combined depth+stencil (depth unused)");
+                                                 : "combined depth+stencil");
             return;
         }
     }

@@ -69,6 +69,8 @@ typedef void     (APIENTRYP SM2_PFNGLDISABLEPROC)       (GLenum cap);
 typedef void     (APIENTRYP SM2_PFNGLSTENCILFUNCPROC)   (GLenum func, GLint ref, GLuint mask);
 typedef void     (APIENTRYP SM2_PFNGLSTENCILOPPROC)     (GLenum fail, GLenum zfail, GLenum zpass);
 typedef void     (APIENTRYP SM2_PFNGLSTENCILMASKPROC)   (GLuint mask);
+typedef void     (APIENTRYP SM2_PFNGLDEPTHFUNCPROC)     (GLenum func);
+typedef void     (APIENTRYP SM2_PFNGLDEPTHMASKPROC)     (GLboolean flag);
 typedef void     (APIENTRYP SM2_PFNGLCLEARPROC)         (GLbitfield mask);
 typedef void     (APIENTRYP SM2_PFNGLCLEARCOLORPROC)    (GLclampf red, GLclampf green, GLclampf blue,
                                                          GLclampf alpha);
@@ -148,6 +150,8 @@ extern SM2_PFNGLDRAWARRAYSPROC          DrawArrays;
 extern SM2_PFNGLENABLEPROC              Enable;
 extern SM2_PFNGLDISABLEPROC             Disable;
 extern SM2_PFNGLSTENCILFUNCPROC         StencilFunc;
+extern SM2_PFNGLDEPTHFUNCPROC           DepthFunc;
+extern SM2_PFNGLDEPTHMASKPROC           DepthMask;
 extern SM2_PFNGLSTENCILOPPROC           StencilOp;
 extern SM2_PFNGLSTENCILMASKPROC         StencilMask;
 extern SM2_PFNGLCLEARPROC               Clear;

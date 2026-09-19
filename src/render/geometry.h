@@ -92,6 +92,8 @@ enum : u32 {
     /// Deepest mipmap level, in bits 11:8.
     kMaxLevelShift   = 8,
     kFlagTranslucent = 1u << 12,
+    /// Stipple drawn instead as a 50% blend (Translucency::Blended).
+    kFlagBlended     = 1u << 13,
 };
 
 /// A backend-neutral screen-space rectangle: a Vulkan `VkRect2D`'s twin, so a
@@ -116,6 +118,9 @@ struct Batch {
     /// Every polygon in the run is non-discarding, so it can use the
     /// early-fragment-tests pipeline (see polygon.frag).
     bool        early         = false;
+    /// Part of the blended pass: after every other batch, farthest first,
+    /// depth-tested against the draw order instead of the fill mask.
+    bool        blended       = false;
 };
 
 /// One frame's worth of triangulated geometry, ready for a backend to upload.
@@ -175,7 +180,8 @@ constexpr u32 kMaxPolygons = 1 << 15;
 [[nodiscard]] TriangulatedFrame triangulate(const hw::Model2MachineBase* machine,
                                             const hw::Model2Video&       video,
                                             bool*                        warned,
-                                            TextureReplacements*         replacements = nullptr);
+                                            TextureReplacements*         replacements = nullptr,
+                                            bool                         blend_translucency = false);
 
 /// A backend-neutral rectangle in window pixels: a Vulkan `VkViewport`'s twin.
 struct Letterbox {

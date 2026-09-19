@@ -800,6 +800,7 @@ int main(int argc, char** argv)
     options.config.texture_filter = from_file.texture_filter;
     options.config.anisotropy     = from_file.anisotropy;
     options.config.upscale_2d     = from_file.upscale_2d;
+    options.config.translucency   = from_file.translucency;
     options.config.custom_textures = from_file.custom_textures;
     options.config.dump_textures   = from_file.dump_textures;
 
@@ -1701,6 +1702,7 @@ int main(int argc, char** argv)
         backend_config.enhancement.texture_filter = options.config.texture_filter;
         backend_config.enhancement.anisotropy     = options.config.anisotropy;
         backend_config.enhancement.upscale_2d     = options.config.upscale_2d;
+        backend_config.enhancement.translucency   = options.config.translucency;
 
         // Each factory is only defined when its SM2_BUILD_* option was on, so
         // the #if guards keep an absent backend from being an undefined symbol.
@@ -2429,6 +2431,7 @@ int main(int argc, char** argv)
                 enhancement.texture_filter = options.config.texture_filter;
                 enhancement.anisotropy     = options.config.anisotropy;
                 enhancement.upscale_2d     = options.config.upscale_2d;
+                enhancement.translucency   = options.config.translucency;
                 backend->set_enhancement_options(enhancement);
             }
 
@@ -2462,7 +2465,8 @@ int main(int argc, char** argv)
             // GPU capabilities gate the enhancement options in the GUI.
             {
                 const render::Capabilities caps = backend->capabilities();
-                gui.set_enhancement_caps(caps.anisotropy, caps.max_anisotropy);
+                gui.set_enhancement_caps(caps.anisotropy, caps.max_anisotropy,
+                                         caps.blended_translucency);
             }
             // Feed the States tab the game's slots (only while the overlay is up,
             // since listing them touches the filesystem).

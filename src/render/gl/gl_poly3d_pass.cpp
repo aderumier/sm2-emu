@@ -268,7 +268,8 @@ void Poly3DPass::build(const hw::Model2MachineBase* machine, const hw::Model2Vid
     sync_replacements();
 
     m_frame_geometry = render::triangulate(machine, video, &m_capacity_warned,
-                                           m_atlas_live ? m_replacements : nullptr);
+                                           m_atlas_live ? m_replacements : nullptr,
+                                           m_blend_translucency);
 
     m_vertex_count = static_cast<u32>(m_frame_geometry.vertices.size());
     if (m_vertex_count != 0) {
@@ -287,7 +288,8 @@ void Poly3DPass::draw_polygons()
     // and re-sample. Only the fill-mask stencil is cleared -- clearing colour
     // would wipe the below-tilemap.
     ClearStencil(0);
-    Clear(GL_STENCIL_BUFFER_BIT);
+    DepthMask(GL_TRUE);
+    Clear(GL_STENCIL_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     if (m_vertex_count == 0) {
         return;
@@ -316,6 +318,13 @@ void Poly3DPass::draw_polygons()
     StencilFunc(GL_EQUAL, 0, 0xff);
     StencilOp(GL_KEEP, GL_KEEP, GL_INCR);
     StencilMask(0xff);
+
+    // Everything but the blended pass keeps the fill mask; with blending on it
+    // also records its draw order as depth for that pass to test.
+    if (m_blend_translucency) {
+        Enable(GL_DEPTH_TEST);
+        DepthFunc(GL_ALWAYS);
+    }
 
     // Premultiplied over: the shader writes alpha 1 for every non-discarded
     // pixel, so this overwrites where a polygon draws and leaves the
@@ -354,10 +363,17 @@ void Poly3DPass::draw_polygons()
     EnableVertexAttribArray(3);
 
     // Bindings are global, shared by both programs; only UseProgram switches.
-    u32 bound = 0;
+    u32  bound   = 0;
+    bool blended = false;
     for (const render::Batch& batch : m_frame_geometry.batches) {
         if (batch.vertex_count == 0) {
             continue;
+        }
+        if (batch.blended && !blended) {
+            blended = true;
+            DepthFunc(GL_LESS);
+            DepthMask(GL_FALSE);
+            Disable(GL_STENCIL_TEST);
         }
         const u32 wanted = batch.early ? m_polygon_program_early : m_polygon_program;
         if (wanted != bound) {
@@ -374,6 +390,8 @@ void Poly3DPass::draw_polygons()
     }
 
     Disable(GL_STENCIL_TEST);
+    Disable(GL_DEPTH_TEST);
+    DepthMask(GL_TRUE);
 }
 
 }  // namespace sm2::render::gl

@@ -146,6 +146,19 @@ constexpr u32 kMaxRenderScale = 4;
     return "faithful";
 }
 
+[[nodiscard]] bool parse_translucency(const std::string& value, Translucency* out)
+{
+    const std::string text = lowered(value);
+    if (text == "stipple") { *out = Translucency::Stipple; return true; }
+    if (text == "blended") { *out = Translucency::Blended; return true; }
+    return false;
+}
+
+[[nodiscard]] const char* translucency_name(Translucency mode)
+{
+    return mode == Translucency::Blended ? "blended" : "stipple";
+}
+
 [[nodiscard]] bool parse_upscale_2d(const std::string& value, Upscale2D* out)
 {
     const std::string text = lowered(value);
@@ -473,6 +486,10 @@ bool load_config(const std::string& path, Config* out, std::vector<std::string>*
             if (!parse_upscale_2d(value, &out->upscale_2d)) {
                 bad_value();
             }
+        } else if (key == "translucency") {
+            if (!parse_translucency(value, &out->translucency)) {
+                bad_value();
+            }
         } else if (key == "custom_textures") {
             if (!parse_bool(value, &out->custom_textures)) {
                 bad_value();
@@ -744,9 +761,13 @@ bool save_config(const std::string& path, const Config& config)
         << "# texture_filter: faithful or anisotropic (sharper 3D at grazing\n"
         << "# angles); anisotropy is the 2..16 tap ceiling, clamped to the GPU.\n"
         << "# upscale_2d: faithful, xbr or scalefx (edge-smooth the 2D layers).\n"
+        << "# translucency: stipple (the hardware's checkerboard) or blended\n"
+        << "# (the 50% see-through it's trying to achieve: lights, glass,\n"
+        << "# shadows).\n"
         << "texture_filter = " << texture_filter_name(config.texture_filter) << "\n"
         << "anisotropy = " << config.anisotropy << "\n"
         << "upscale_2d = " << upscale_2d_name(config.upscale_2d) << "\n"
+        << "translucency = " << translucency_name(config.translucency) << "\n"
         << "\n"
         << "# Custom textures: images in <saves>/textures/<game>/load named as\n"
         << "# dumped replace the game's own, at any whole multiple of the size.\n"

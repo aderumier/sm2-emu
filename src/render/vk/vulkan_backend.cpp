@@ -113,6 +113,7 @@ Capabilities VulkanBackend::capabilities() const
     caps.max_anisotropy  = caps.anisotropy
                                ? m_context.device_properties().limits.maxSamplerAnisotropy
                                : 1.0F;
+    caps.blended_translucency = m_polygons.stencil_has_depth();
     return caps;
 }
 
@@ -222,6 +223,7 @@ void VulkanBackend::set_enhancement_options(const EnhancementOptions& options)
 {
     m_enhancement_options = options;
     m_polygons.set_texture_quality(effective_texture_quality());
+    m_polygons.set_blend_translucency(options.translucency == Translucency::Blended);
     m_tilemaps.set_upscale_2d(static_cast<u32>(options.upscale_2d));
 }
 

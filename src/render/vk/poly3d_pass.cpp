@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <iterator>
 
 namespace sm2::render::vk {
 namespace {
@@ -670,11 +671,15 @@ bool Poly3DPass::create_polygon_pipeline(const u32*  fragment_code,
     blend_state.attachmentCount = 1;
     blend_state.pAttachments    = &attachment;
 
-    const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                             VK_DYNAMIC_STATE_SCISSOR};
+    // Depth and stencil testing are dynamic so the blended translucency pass
+    // can swap the fill mask for a depth test without pipelines of its own.
+    const VkDynamicState dynamic_states[] = {
+        VK_DYNAMIC_STATE_VIEWPORT,           VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,  VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,   VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE};
     VkPipelineDynamicStateCreateInfo dynamic_state{};
     dynamic_state.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamic_state.dynamicStateCount = 2;
+    dynamic_state.dynamicStateCount = static_cast<u32>(std::size(dynamic_states));
     dynamic_state.pDynamicStates    = dynamic_states;
 
     VkPipelineRenderingCreateInfo rendering{};
@@ -1082,7 +1087,8 @@ void Poly3DPass::build(const hw::Model2MachineBase* machine, const hw::Model2Vid
     // doc comment for why this moved out of Poly3DPass rather than staying
     // duplicated per backend.
     m_frame_geometry = render::triangulate(machine, video, &m_capacity_warned,
-                                           m_atlas_live ? m_replacements : nullptr);
+                                           m_atlas_live ? m_replacements : nullptr,
+                                           blending());
 
     m_vertex_count = static_cast<u32>(m_frame_geometry.vertices.size());
     if (m_vertex_count != 0) {
@@ -1156,10 +1162,26 @@ void Poly3DPass::draw_polygons()
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(push), &push);
 
-        VkPipeline bound = VK_NULL_HANDLE;
+        // Everything but the blended pass keeps the fill mask; with blending
+        // on it also records its draw order as depth for that pass to test.
+        const VkBool32 ordered = blending() ? VK_TRUE : VK_FALSE;
+        vkCmdSetDepthTestEnable(cmd, ordered);
+        vkCmdSetDepthWriteEnable(cmd, ordered);
+        vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_ALWAYS);
+        vkCmdSetStencilTestEnable(cmd, VK_TRUE);
+
+        VkPipeline bound   = VK_NULL_HANDLE;
+        bool       blended = false;
         for (const render::Batch& batch : m_frame_geometry.batches) {
             if (batch.vertex_count == 0) {
                 continue;
+            }
+            if (batch.blended && !blended) {
+                blended = true;
+                vkCmdSetDepthTestEnable(cmd, VK_TRUE);
+                vkCmdSetDepthWriteEnable(cmd, VK_FALSE);
+                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_LESS);
+                vkCmdSetStencilTestEnable(cmd, VK_FALSE);
             }
             const VkPipeline wanted =
                 batch.early ? m_polygon_pipeline_early : m_polygon_pipeline;

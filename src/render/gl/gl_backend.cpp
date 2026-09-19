@@ -128,6 +128,7 @@ Capabilities GlBackend::capabilities() const
     caps.gpu_timing = false;
     caps.anisotropy      = m_max_anisotropy > 1.0F;
     caps.max_anisotropy  = m_max_anisotropy;
+    caps.blended_translucency = true;
     return caps;
 }
 
@@ -258,6 +259,7 @@ void GlBackend::set_enhancement_options(const EnhancementOptions& options)
 {
     m_enhancement_options = options;
     m_polygons.set_texture_quality(effective_texture_quality());
+    m_polygons.set_blend_translucency(options.translucency == Translucency::Blended);
     m_tilemaps.set_upscale_2d(static_cast<u32>(options.upscale_2d));
 }
 

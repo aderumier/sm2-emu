@@ -148,10 +148,11 @@ public:
     /// GPU capabilities for gating the enhancement options, fed each frame so
     /// the GUI need not include the render backend header. Defaults leave the
     /// opt-in enhancements unavailable until a backend reports otherwise.
-    void set_enhancement_caps(bool anisotropy, float max_anisotropy)
+    void set_enhancement_caps(bool anisotropy, float max_anisotropy, bool blended_translucency)
     {
         m_caps_anisotropy     = anisotropy;
         m_caps_max_anisotropy = max_anisotropy;
+        m_caps_blended        = blended_translucency;
     }
 
     /// How many custom textures the running game has loaded, for the settings.
@@ -264,6 +265,7 @@ private:
     /// GPU capabilities for gating the enhancement options (set each frame).
     bool  m_caps_anisotropy     = false;
     float m_caps_max_anisotropy = 1.0F;
+    bool  m_caps_blended        = false;
 
     usize m_custom_texture_count     = 0;
     bool  m_texture_reload_requested = false;
